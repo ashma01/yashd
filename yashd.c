@@ -293,19 +293,6 @@ char *manageCommandOrSignals(char *cmd)
 
         return newCmd;
     }
-    // else if (strstr(cmd, "CTL"))
-    // {
-    //     if (strstr(cmd, "CTL C") || strstr(cmd, "CTL c"))
-    //     {
-    //         dprintf(2, "got %s\n", cmd);
-    //         kill(-cpid, SIGINT);
-    //     }
-    //     else if (strstr(cmd, "CTL Z") || strstr(cmd, "CTL z"))
-    //     {
-    //         dprintf(2, "got %s\n", cmd);
-    //         kill(-cpid, SIGTSTP);
-    //     }
-    // }
     return NULL;
 }
 
@@ -319,9 +306,9 @@ void execute(char *inString, int psd, struct jobList **rootJob)
         newCmd = manageCommandOrSignals(inString);
         if (newCmd != NULL)
         {
-            pthread_mutex_lock(&lock);
+            // pthread_mutex_lock(&lock);
             char **resultString = parsecommands(newCmd, psd, rootJob);
-            pthread_mutex_unlock(&lock);
+            // pthread_mutex_unlock(&lock);
         }
     }
 }

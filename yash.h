@@ -23,6 +23,8 @@
 #define bg 0
 #define BUFSIZE 1024
 
+/* Declaration of strcutures*/
+
 typedef enum
 {
     RUNNING,
@@ -60,6 +62,18 @@ struct ClientJobList
     struct ClientJobList *next;
 };
 
+typedef struct waitStruct
+{
+    int psd;
+    int groupId;
+    int doneFlag;
+} waitStruct;
+
+/* Declaration of Functions*/
+void printZombies();
+int *getPidListClient(struct ClientJobList *headRef);
+void *waitingThread(void *param);
+void checkForCTLcmd(char *cmd, int pid, int *doneFlag);
 struct jobList *deleteJobByPid(struct jobList **headRef, int pid);
 void deleteByPIDClientList(struct ClientJobList **rootClientJobList, int pid);
 int *getPidList(struct jobList **headRef);
@@ -84,9 +98,11 @@ int isEmpty(struct jobList *root);
 void checkPrevJobCount(struct jobList **temp);
 void assigbJobSign(struct jobList **jobRef);
 int getProcessCount();
+void waitFunction(int pid, int psd, int *waitStatus);
 
 pthread_cond_t cond1 = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t childTlock = PTHREAD_MUTEX_INITIALIZER;
 
 struct ClientJobList *rootClientJobList = NULL;
 pid_t cpid;
@@ -102,6 +118,45 @@ int isEmpty(struct jobList *root)
 int isEmptyClient(struct ClientJobList *root)
 {
     return !root;
+}
+
+void printZombies()
+{
+    int *pidlist;
+    struct ClientJobList *clientList = NULL;
+    // pidlist = getPidList(&rootClientJobList->job);
+    // int *newPid;
+    pidlist = getPidListClient(rootClientJobList);
+
+    if (pidlist != NULL)
+    {
+        int arraySize = sizeof(pidlist);
+        int intSize = sizeof(pidlist[0]);
+        int length = arraySize / intSize;
+        int pidsize = 0;
+        int index = 0;
+        while (index < length)
+        {
+
+            int status, pid;
+            if (pidlist[index] != 0)
+            {
+
+                pid = waitpid(pidlist[index], &status, WNOHANG);
+                struct jobList *jobObj =
+                    (struct jobList *)
+                        malloc(sizeof(struct jobList));
+                deleteByPIDClientList(&rootClientJobList, pid);
+            }
+            index++;
+        }
+    }
+}
+void cleanup(char *buf)
+{
+    int i;
+    for (i = 0; i < BUFSIZE; i++)
+        buf[i] = '\0';
 }
 
 /** This function is to search the job in the joblist and returns true if present**/
@@ -148,10 +203,6 @@ int *getPidListClient(struct ClientJobList *headRef)
         }
 
         clientListTemp = clientListTemp->next;
-    }
-    for (int i = 0; i < index; i++)
-    {
-        dprintf(2, "lists  [%d] ", pidlist[i]);
     }
     return pidlist;
 }
@@ -265,7 +316,6 @@ struct jobList *changeJobSign(struct jobList **root)
 void pushJob(struct jobList **root, int jobId, char *jobCommand, JobStatus jobStatus, int jobCount, struct processList *process, int terminal)
 {
     struct jobList *newJob = newNode(jobId, jobCommand, jobStatus, jobCount, process, terminal);
-    dprintf(2, "inside inserting new job in job list");
     if (*root == NULL)
     {
         newJob->next = NULL;
@@ -281,13 +331,12 @@ void pushJob(struct jobList **root, int jobId, char *jobCommand, JobStatus jobSt
 void pushClientJob(struct ClientJobList **clientRoot, struct jobList *job, int terminal, struct processList *process, JobStatus jobStatus, int jobNumber)
 {
 
-    dprintf(2, "inside pushClientJob\n");
     if (*clientRoot == NULL)
     {
         struct ClientJobList *clinetNewJob =
             (struct ClientJobList *)
                 malloc(sizeof(struct ClientJobList));
-        dprintf(2, "inside inserting new job\n");
+
         pushJob(&clinetNewJob->job, process->cpid, process->processString, jobStatus, jobNumber, process, terminal);
         struct jobList *job = clinetNewJob->job;
         clinetNewJob->terminalID = terminal;
@@ -302,12 +351,12 @@ void pushClientJob(struct ClientJobList **clientRoot, struct jobList *job, int t
         clinetNewJob = search(clientRoot, terminal);
         if (clinetNewJob != NULL)
         {
-            dprintf(2, "found terminal\n");
+
             pushJob(&clinetNewJob->job, process->cpid, process->processString, jobStatus, jobNumber, process, terminal);
         }
         else
         {
-            dprintf(2, "new terminal\n");
+
             struct ClientJobList *clinetNewJob =
                 (struct ClientJobList *)
                     malloc(sizeof(struct ClientJobList));
@@ -708,14 +757,6 @@ int getProcessCount(struct processList *rootProcess)
  * as a parameter and runs the command
  * in foreground or background mode depending on that**/
 
-typedef struct waitStruct
-{
-    int psd;
-    int groupId;
-} waitStruct;
-void newThreadWaiting(int pid, int psd);
-void *waitingThread(void *param);
-void checkForCTLcmd(char *cmd, int pid);
 int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int job_type, int psd, struct jobList **rootJob)
 {
 
@@ -793,56 +834,13 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         {
             tcsetpgrp(0, rootProcess->groupId);
             int waitCount = 0;
-            int waitid1 = 0;
             siginfo_t SignalInfo;
             int processCount = getProcessCount(rootProcess);
-            // do
-            // {
-            //     waitid1 = waitpid(-rootProcess->groupId, &wstatus, WUNTRACED);
-            //     waitCount++;
-            //     if (WIFSTOPPED(wstatus))
-            //     {
-            //         // pushJob(rootJob, rootProcess->cpid, rootProcess->processString, STOPPED, ++globalJobNumber, rootProcess, psd);
-            //         pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++globalJobNumber);
-            //     }
-            // } while (waitCount < processCount);
-            // waitid1 = status;
-
-            // if (WIFSTOPPED(wstatus))
-            // {
-            //     dprintf(2, "\n****WIFEXITED*****\n");
-            //     // pushJob(rootJob, rootProcess->cpid, rootProcess->processString, STOPPED, ++globalJobNumber, rootProcess, psd);
-            //     // pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++globalJobNumber);
-            // }
-            // newThreadWaiting(rootProcess->groupId, psd);
-            usleep(50000);
-            waitid1 = waitpid(-rootProcess->groupId, &wstatus, WNOHANG);
-            dprintf(2, "wait pid %d\n", waitid1);
-            if (waitid1 == 0)
+            int waitStatus;
+            waitFunction(rootProcess->groupId, psd, &waitStatus);
+            if (WIFSTOPPED(waitStatus))
             {
-                do
-                {
-                    newThreadWaiting(rootProcess->groupId, psd);
-                    waitid1 = waitpid(-rootProcess->groupId, &wstatus, WUNTRACED);
-                    if (waitid1 == 0)
-                    {
-                        continue;
-                    }
-                    dprintf(2, "wait pid %d\n", waitid1);
-                } while (waitid1 == 0);
-            }
-            if (WIFEXITED(wstatus))
-            {
-                printf("exited, status=%d\n", WEXITSTATUS(wstatus));
-            }
-            if (WIFSIGNALED(wstatus))
-            {
-                printf("killed by signal %d\n", WTERMSIG(wstatus));
-            }
-            if (WIFSTOPPED(wstatus))
-            {
-
-                printf("stopped by signal %d\n", WSTOPSIG(wstatus));
+                printf("stopped by signal %d\n", WSTOPSIG(waitStatus));
                 pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++globalJobNumber);
             }
             signal(SIGTTOU, SIG_IGN);
@@ -852,7 +850,6 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         else if (job_type == bg)
         {
 
-            // pushJob(rootJob, rootProcess->cpid, rootProcess->processString, RUNNING, ++globalJobNumber, rootProcess, psd);
             dprintf(2, "inside & push\n");
             pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, RUNNING, ++globalJobNumber);
         }
@@ -860,38 +857,38 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
     return status;
 }
 
-void newThreadWaiting(int pid, int psd)
+void waitFunction(int pid, int psd, int *waitStatus)
 {
     pthread_t waitThread;
+    int waitid1 = 0;
     waitStruct args;
-    dprintf(2, "creating new Thread\n");
     args.psd = psd;
     args.groupId = pid;
+    args.doneFlag = 1;
+
     if (pthread_create(&waitThread, NULL, waitingThread, &args) < 0)
     {
         perror("error thread");
     }
+
+    waitid1 = waitpid(-pid, waitStatus, WUNTRACED);
+    args.doneFlag = 2;
+    pthread_cancel(waitThread);
     pthread_join(waitThread, NULL);
 }
-void cleanup(char *buf)
-{
-    int i;
-    for (i = 0; i < BUFSIZE; i++)
-        buf[i] = '\0';
-}
+
 void *waitingThread(void *param)
 {
     char buf[BUFSIZE];
-    // char rbuf[BUFSIZE];
     int rc;
-
     waitStruct *mycmd = (waitStruct *)param;
     int psd = mycmd->psd;
     int pid = mycmd->groupId;
     dprintf(2, "inside waiting thread psd : %d pid: %d\n", psd, pid);
 
-    for (;;)
+    while (mycmd->doneFlag == 1)
     {
+        dprintf(2, "%d ", mycmd->doneFlag);
         cleanup(buf);
         if ((rc = recv(psd, buf, sizeof(buf), 0)) < 0)
         {
@@ -903,7 +900,7 @@ void *waitingThread(void *param)
             buf[rc] = '\0';
             char *inString;
             inString = strdup(buf);
-            checkForCTLcmd(inString, pid);
+            checkForCTLcmd(inString, pid, &(mycmd->doneFlag));
         }
         else
         {
@@ -913,28 +910,30 @@ void *waitingThread(void *param)
     }
     pthread_exit(0);
 }
-void checkForCTLcmd(char *cmd, int pid)
+void checkForCTLcmd(char *cmd, int pid, int *doneFlag)
 {
     if (strstr(cmd, "CTL"))
     {
+        *doneFlag = 3;
         if (strstr(cmd, "CTL C") || strstr(cmd, "CTL c"))
         {
             dprintf(2, "got child %s\n", cmd);
-            kill(-pid, SIGINT);
+            kill(pid, SIGINT);
             pthread_exit(0);
         }
         else if (strstr(cmd, "CTL Z") || strstr(cmd, "CTL z"))
         {
             dprintf(2, "got child %s\n", cmd);
-            kill(-pid, SIGTSTP);
+            kill(pid, SIGTSTP);
             pthread_exit(0);
         }
     }
     else
     {
-        pthread_exit(0);
+        *doneFlag = 1;
+        // pthread_exit(0);
     }
-    pthread_exit(0);
+    // pthread_exit(0);
 }
 /**This function sets the input/output/pipe  parameter before execution**/
 int executeParsedCommand(struct processList *rootProcess, int job_type, int psd, struct jobList **rootJob)
@@ -1005,26 +1004,20 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob)
             if (jobObj->jobStatus != RUNNING)
             {
                 dprintf(psd, "%s\n", jobObj->jobCommand);
-                // printf("%s\n", jobObj->jobCommand);
                 kill(-pid, SIGCONT);
             }
             else
             {
                 dprintf(psd, "%s\n", jobObj->jobCommand);
-                // printf("%s\n", jobObj->jobCommand);
             }
             tcsetpgrp(0, pid);
 
             int status = 0;
-
-            waitpid(pid, &status, WUNTRACED);
+            waitFunction(pid, psd, &status);
 
             if (WSTOPSIG(status))
             {
-                // pushClientJob(&rootClientJobList, jobObj, psd, jobObj->process, STOPPED, jobObj->jobCount);
-
                 pushJob(rootJob, jobObj->process->cpid, jobObj->jobCommand, STOPPED, jobObj->jobCount, jobObj->process, psd);
-                // printf("[%d] %s %s\n", jobObj->jobCount, jobObj->jobSign, jobObj->jobCommand);
             }
 
             signal(SIGTTOU, SIG_IGN);
@@ -1052,14 +1045,10 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob)
             wpid = waitpid(-1, &wstatus, WUNTRACED | WCONTINUED);
             if (WIFCONTINUED(wstatus))
             {
-                // pushClientJob(&rootClientJobList, jobObj, psd, jobObj->process, RUNNING, jobObj->jobCount);
-
                 char buffer[100];
                 pushJob(rootJob, jobObj->process->cpid, jobObj->jobCommand, RUNNING, jobObj->jobCount, jobObj->process, psd);
                 sprintf(buffer, "[%d] %s %s\n", jobObj->jobCount, jobObj->jobSign, jobObj->jobCommand);
                 send(psd, buffer, strlen(buffer), 0);
-                // dprintf(psd, "[%d] %s %s\n", jobObj->jobCount, jobObj->jobSign, jobObj->jobCommand);
-                //  printf("[%d] %s %s\n", jobObj->jobCount, jobObj->jobSign, jobObj->jobCommand);
             }
         }
     }
