@@ -1,29 +1,19 @@
-/**
- * @file TCPClient2-ex2.c
- * @brief The program creates a stream socket
- * in the inet domain, Connect to TCPServer2, Get messages typed by a
- * user and Send them to TCPServer2 running on hostid Then it waits
- * for a reply from the TCPServer2 and show it back to the user, with
- * a message indicating if there is an error during the round trip
- * Run as:
- *   TCPClient-ex2 <hostname> <port>
- */
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <stdio.h>
-/* socket(), bind(), recv, send */
 #include <sys/types.h>
-#include <sys/socket.h> /* sockaddr_in */
-#include <netinet/in.h> /* inet_addr() */
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <netdb.h>  /* struct hostent */
-#include <string.h> /* memset() */
-#include <unistd.h> /* close() */
-#include <stdlib.h> /* exit() */
+#include <netdb.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include <signal.h>
 
 #define MAXHOSTNAME 80
 #define BUFSIZE 1024
+#define PORT 3826
 
 char buf[BUFSIZE];
 char rbuf[BUFSIZE];
@@ -41,6 +31,7 @@ static void sig_int(int signo)
     finalString = updateCommands("C", "CTL");
     if (send(sd, finalString, strlen(finalString), 0) < 0)
         perror("sending stream message");
+    // free(finalString);
 }
 
 static void sig_tstp(int signo)
@@ -50,13 +41,23 @@ static void sig_tstp(int signo)
     finalString = updateCommands("Z", "CTL");
     if (send(sd, finalString, strlen(finalString), 0) < 0)
         perror("sending stream message");
+    // free(finalString);
+}
+
+static void sig_kill(int signo)
+{
+
+    char *finalString = (char *)malloc(sizeof(char) * 1000);
+    finalString = strdup("Plain sid");
+    if (send(sd, finalString, strlen(finalString), 0) < 0)
+        perror("sending stream message");
+    // free(finalString);
 }
 
 int main(int argc, char **argv)
 {
     int childpid;
     struct sockaddr_in server;
-    struct sockaddr_in client;
     struct hostent *hp, *gethostbyname();
     struct sockaddr_in from;
     struct sockaddr_in addr;
@@ -67,16 +68,18 @@ int main(int argc, char **argv)
     signal(SIGINT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
 
+    memset(&server, 0, sizeof(server));
+
     gethostname(ThisHost, MAXHOSTNAME);
 
-    printf("----TCP/Client running at host NAME: %s\n", ThisHost);
+    printf("Client NAME: %s\n", ThisHost);
     if ((hp = gethostbyname(ThisHost)) == NULL)
     {
         fprintf(stderr, "Can't find host %s\n", argv[1]);
         exit(-1);
     }
     bcopy(hp->h_addr, &(server.sin_addr), hp->h_length);
-    printf("    (TCP/Client INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
+    printf("(Client INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
 
     if ((hp = gethostbyname(argv[1])) == NULL)
     {
@@ -88,13 +91,13 @@ int main(int argc, char **argv)
             exit(-1);
         }
     }
-    printf("----TCP/Server running at host NAME: %s\n", hp->h_name);
+    printf("Server running at host NAME: %s\n", hp->h_name);
     bcopy(hp->h_addr, &(server.sin_addr), hp->h_length);
-    printf("    (TCP/Server INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
+    printf("Server INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
 
     server.sin_family = AF_INET;
 
-    server.sin_port = htons(7878);
+    server.sin_port = htons(PORT);
 
     sd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -177,6 +180,7 @@ char *updateCommands(char *inString, char *cmdType)
     {
         return NULL;
     }
+
     return finalCmd;
 }
 
@@ -193,8 +197,14 @@ void GetUserInput()
     char *inString = (char *)malloc(sizeof(char) * 1000);
     char *inputCommand = (char *)malloc(sizeof(char) * 1000);
     char *cmdString;
-    while ((inString = readline("")))
+
+    for (;;)
     {
+        cleanup(buf);
+        rc = read(0, buf, sizeof(buf));
+        if (rc == 0)
+            break;
+        inString = strdup(buf);
         inputCommand = removeGarbage(inString);
         if (inputCommand != NULL)
         {
@@ -203,7 +213,7 @@ void GetUserInput()
                 perror("sending stream message");
         }
     }
-    printf("EOF... exit\n");
+    printf("exit\n");
     close(sd);
     kill(getppid(), 9);
     exit(0);

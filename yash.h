@@ -1,10 +1,9 @@
 /**
- *Program Name: yash.c
+ *Program Name: yash.h
  *Author : Ashma Parveen
- *This program reads the input from the terminal(stdin) and executes commands by creating processes as a shell.
+ *This program reads the input from the client's terminal and executes commands by creating processes as a shell.
  *It implements a subset of features supported by a standard shell like bash/zsh.
  **/
-
 #include <stdio.h>
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -57,7 +56,7 @@ struct jobList
 struct ClientJobList
 {
     int terminalID;
-    int globalJobNumber;
+    int clientJobNumber;
     struct jobList *job;
     struct ClientJobList *next;
 };
@@ -67,15 +66,17 @@ typedef struct waitStruct
     int psd;
     int groupId;
     int doneFlag;
+    int outfd;
+    struct sockaddr_in cliAddr;
 } waitStruct;
 
 /* Declaration of Functions*/
 void printZombies();
 int *getPidListClient(struct ClientJobList *headRef);
 void *waitingThread(void *param);
-void checkForCTLcmd(char *cmd, int pid, int *doneFlag);
-struct jobList *deleteJobByPid(struct jobList **headRef, int pid);
-void deleteByPIDClientList(struct ClientJobList **rootClientJobList, int pid);
+void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc);
+struct jobList *deleteJobByPid(struct jobList **headRef, int pid, int psd);
+void deleteByPIDClientList(struct ClientJobList **rootClientJobList, int pid, int psd);
 int *getPidList(struct jobList **headRef);
 const char *getJobsStatus(JobStatus jobStatus);
 struct ClientJobList *search(struct ClientJobList **headRef, int terminalID);
@@ -89,26 +90,22 @@ int checkIfShellCommands(char *inString);
 char **parseStringStrtok(char *str, char *delim);
 struct processList *parseSubCommand(char **subCommand);
 struct processList *parseStringforPipes(char **parsedCmdArray);
-int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int job_type, int psd, struct jobList **rootJob);
-int executeParsedCommand(struct processList *rootProcess, int job_type, int psd, struct jobList **rootJob);
-void executeShellCommands(char *inString, int psd, struct jobList **rootJob);
-char **parsecommands(char *inString, int psd, struct jobList **rootJob);
+int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int job_type, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr);
+int executeParsedCommand(struct processList *rootProcess, int job_type, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr);
+void executeShellCommands(char *inString, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr);
+char **parsecommands(char *inString, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr);
 void sigChildHandler(int signo);
 int isEmpty(struct jobList *root);
-void checkPrevJobCount(struct jobList **temp);
+void checkPrevJobCount(struct jobList **temp, int psd);
 void assigbJobSign(struct jobList **jobRef);
 int getProcessCount();
-void waitFunction(int pid, int psd, int *waitStatus);
+void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr, int outfd);
 
 pthread_cond_t cond1 = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t childTlock = PTHREAD_MUTEX_INITIALIZER;
 
 struct ClientJobList *rootClientJobList = NULL;
-pid_t cpid;
-int wpid;
-int wstatus;
-int globalJobNumber = 0;
 
 /** This function checks for empty list**/
 int isEmpty(struct jobList *root)
@@ -120,12 +117,10 @@ int isEmptyClient(struct ClientJobList *root)
     return !root;
 }
 
-void printZombies()
+void printZombies(int psd)
 {
     int *pidlist;
     struct ClientJobList *clientList = NULL;
-    // pidlist = getPidList(&rootClientJobList->job);
-    // int *newPid;
     pidlist = getPidListClient(rootClientJobList);
 
     if (pidlist != NULL)
@@ -146,7 +141,7 @@ void printZombies()
                 struct jobList *jobObj =
                     (struct jobList *)
                         malloc(sizeof(struct jobList));
-                deleteByPIDClientList(&rootClientJobList, pid);
+                deleteByPIDClientList(&rootClientJobList, pid, psd);
             }
             index++;
         }
@@ -162,8 +157,10 @@ void cleanup(char *buf)
 /** This function is to search the job in the joblist and returns true if present**/
 struct ClientJobList *search(struct ClientJobList **headRef, int terminalID)
 {
+
     struct ClientJobList *temp = *headRef;
-    if (headRef == NULL)
+
+    if (isEmptyClient(*headRef))
     {
         return NULL;
     }
@@ -233,46 +230,11 @@ void printdone(struct jobList *root)
     if (root != NULL)
     {
         char buffer[100];
-        sprintf(buffer, "\n[%d] %s %s %s %d %d\n", root->jobCount, root->jobSign, "Done", root->jobCommand, root->jobId, root->terminal);
+        sprintf(buffer, "[%d] %s %s %s\n", root->jobCount, root->jobSign, "Done", root->jobCommand);
         send(root->terminal, buffer, strlen(buffer), 0);
 
         // dprintf(root->terminal, "\n[%d] %s %s %s %d %d\n", root->jobCount, root->jobSign, "Done", root->jobCommand, root->jobId, root->terminal);
         // printf("\n[%d] %s %s %s\n", root->jobCount, root->jobSign, "Done", root->jobCommand);
-    }
-}
-
-/** Handler for SIGCHLD signal sent by the shell to the parent process after termination of child process**/
-void sigChildHandler(int signo)
-{
-
-    int *pidlist;
-    struct ClientJobList *clientList = NULL;
-    // pidlist = getPidList(&rootClientJobList->job);
-    // int *newPid;
-    pidlist = getPidListClient(rootClientJobList);
-
-    if (pidlist != NULL)
-    {
-        int arraySize = sizeof(pidlist);
-        int intSize = sizeof(pidlist[0]);
-        int length = arraySize / intSize;
-        int pidsize = 0;
-        int index = 0;
-        while (index < length)
-        {
-
-            int status, pid;
-            if (pidlist[index] != 0)
-            {
-
-                pid = waitpid(pidlist[index], &status, WNOHANG);
-                struct jobList *jobObj =
-                    (struct jobList *)
-                        malloc(sizeof(struct jobList));
-                deleteByPIDClientList(&rootClientJobList, pid);
-            }
-            index++;
-        }
     }
 }
 
@@ -360,7 +322,7 @@ void pushClientJob(struct ClientJobList **clientRoot, struct jobList *job, int t
             struct ClientJobList *clinetNewJob =
                 (struct ClientJobList *)
                     malloc(sizeof(struct ClientJobList));
-            pushJob(&clinetNewJob->job, process->cpid, process->processString, jobStatus, ++globalJobNumber, process, terminal);
+            pushJob(&clinetNewJob->job, process->cpid, process->processString, jobStatus, jobNumber, process, terminal);
             struct jobList *job = clinetNewJob->job;
             clinetNewJob->terminalID = terminal;
             clinetNewJob->next = *clientRoot;
@@ -396,7 +358,7 @@ void printJobs(struct jobList *root, int terminalID)
     }
 }
 
-void printClientJobs(struct ClientJobList *root)
+void printClientJobs(struct ClientJobList *root, int psd)
 {
 
     if (!isEmpty(root->job))
@@ -405,7 +367,10 @@ void printClientJobs(struct ClientJobList *root)
     }
     else
     {
-        globalJobNumber = 0;
+        struct ClientJobList *clientList = NULL;
+        clientList = search(&rootClientJobList, psd);
+        if (clientList != NULL)
+            clientList->clientJobNumber = 0;
     }
 }
 
@@ -434,19 +399,19 @@ struct jobList *deleteJobByStatus(struct jobList **headRef, JobStatus jobStatus)
     return temp;
 }
 
-void deleteByPIDClientList(struct ClientJobList **rootClientJobList, int pid)
+void deleteByPIDClientList(struct ClientJobList **rootClientJobList, int pid, int psd)
 {
     struct ClientJobList *tempClientJobList = *rootClientJobList;
     struct jobList *tempJobList = NULL;
     while (tempClientJobList != NULL)
     {
-        tempJobList = deleteJobByPid(&tempClientJobList->job, pid);
+        tempJobList = deleteJobByPid(&tempClientJobList->job, pid, psd);
         tempClientJobList = tempClientJobList->next;
     }
 }
 
 /** This function deletes the job with the given pid from the job list **/
-struct jobList *deleteJobByPid(struct jobList **headRef, int pid)
+struct jobList *deleteJobByPid(struct jobList **headRef, int pid, int psd)
 {
 
     struct jobList *temp = *headRef, *prev;
@@ -454,9 +419,11 @@ struct jobList *deleteJobByPid(struct jobList **headRef, int pid)
     if (temp != NULL && temp->jobId == pid)
     {
         *headRef = temp->next;
-        if (temp->jobCount == globalJobNumber)
+        struct ClientJobList *clientList = NULL;
+        clientList = search(&rootClientJobList, psd);
+        if (clientList != NULL && temp->jobCount == clientList->clientJobNumber)
         {
-            checkPrevJobCount(&temp);
+            checkPrevJobCount(&temp, psd);
         }
         printdone(temp);
         return temp;
@@ -472,9 +439,11 @@ struct jobList *deleteJobByPid(struct jobList **headRef, int pid)
         return NULL;
 
     prev->next = temp->next;
-    if (temp->jobCount == globalJobNumber)
+    struct ClientJobList *clientList = NULL;
+    clientList = search(&rootClientJobList, psd);
+    if (clientList != NULL && temp->jobCount == clientList->clientJobNumber)
     {
-        checkPrevJobCount(&temp);
+        checkPrevJobCount(&temp, psd);
     }
     printdone(temp);
     return temp;
@@ -501,27 +470,32 @@ void assigbJobSign(struct jobList **jobRef)
 }
 
 /**This function updates the globalJobNumber once the job with highest job number gets completed **/
-void checkPrevJobCount(struct jobList **temp)
+void checkPrevJobCount(struct jobList **temp, int psd)
 {
     struct jobList *prevNode = NULL;
     struct jobList *curNode = *temp;
-    if (curNode->next != NULL)
+    struct ClientJobList *clientList = NULL;
+    clientList = search(&rootClientJobList, psd);
+    if (clientList != NULL)
     {
-        prevNode = curNode->next;
-        globalJobNumber = prevNode->jobCount;
-    }
-    else
-    {
-        globalJobNumber = 0;
+        if (curNode->next != NULL)
+        {
+            prevNode = curNode->next;
+            clientList->clientJobNumber = prevNode->jobCount;
+        }
+        else
+        {
+            clientList->clientJobNumber = 0;
+        }
     }
 }
 
 /** This function does the initianlization of the shell and handles the signal for yash **/
 void initshell()
 {
-    printf("Welcome to the new YetAnotherShell\n");
+    // dprintf("Welcome to the new YetAnotherShell\n");
 
-    signal(SIGCHLD, sigChildHandler);
+    // signal(SIGCHLD, sigChildHandler);
     signal(SIGINT, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
@@ -529,7 +503,7 @@ void initshell()
 
     pid_t pid = getpid();
     setpgid(pid, pid);
-    tcsetpgrp(0, pid);
+    // tcsetpgrp(0, pid);
 }
 
 /**To check if the given command is shell command**/
@@ -757,11 +731,11 @@ int getProcessCount(struct processList *rootProcess)
  * as a parameter and runs the command
  * in foreground or background mode depending on that**/
 
-int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int job_type, int psd, struct jobList **rootJob)
+int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int job_type, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr)
 {
 
     int status = 0;
-
+    int cpid;
     cpid = fork();
 
     if (cpid < 0)
@@ -807,6 +781,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         close(STDOUT_FILENO);
         dup2(psd, STDOUT_FILENO);
         dup2(psd, STDERR_FILENO);
+
         if (execvp(rootProcess->processArgs[0], rootProcess->processArgs) < 0)
         {
             exit(0);
@@ -832,32 +807,53 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
 
         if (job_type == fg)
         {
-            tcsetpgrp(0, rootProcess->groupId);
+            // tcsetpgrp(0, rootProcess->groupId);
             int waitCount = 0;
             siginfo_t SignalInfo;
             int processCount = getProcessCount(rootProcess);
             int waitStatus;
-            waitFunction(rootProcess->groupId, psd, &waitStatus);
+            pthread_mutex_lock(&lock);
+            waitFunction(rootProcess->groupId, psd, &waitStatus, cliaddr, outfd);
+
             if (WIFSTOPPED(waitStatus))
             {
+                struct ClientJobList *clientList = NULL;
+                clientList = search(&rootClientJobList, psd);
                 printf("stopped by signal %d\n", WSTOPSIG(waitStatus));
-                pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++globalJobNumber);
+                int jobNumber = 0;
+                if (clientList != NULL && !isEmpty(clientList->job))
+                {
+                    clientList->clientJobNumber = clientList->clientJobNumber + 1;
+                    jobNumber = clientList->clientJobNumber;
+                }
+                pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++jobNumber);
             }
+            pthread_mutex_unlock(&lock);
             signal(SIGTTOU, SIG_IGN);
-            tcsetpgrp(0, getpid());
+            // tcsetpgrp(0, getpid());
             signal(SIGTTOU, SIG_DFL);
         }
         else if (job_type == bg)
         {
 
             dprintf(2, "inside & push\n");
-            pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, RUNNING, ++globalJobNumber);
+            struct ClientJobList *clientList = NULL;
+
+            clientList = search(&rootClientJobList, psd);
+            int jobNumber = 0;
+            if (clientList != NULL && !isEmpty(clientList->job))
+            {
+                clientList->clientJobNumber = clientList->clientJobNumber + 1;
+                jobNumber = clientList->clientJobNumber;
+                dprintf(2, "found client %d", jobNumber);
+            }
+            pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, RUNNING, ++jobNumber);
         }
     }
     return status;
 }
 
-void waitFunction(int pid, int psd, int *waitStatus)
+void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr, int outfd)
 {
     pthread_t waitThread;
     int waitid1 = 0;
@@ -865,6 +861,8 @@ void waitFunction(int pid, int psd, int *waitStatus)
     args.psd = psd;
     args.groupId = pid;
     args.doneFlag = 1;
+    args.cliAddr = cliaddr;
+    args.outfd = outfd;
 
     if (pthread_create(&waitThread, NULL, waitingThread, &args) < 0)
     {
@@ -884,33 +882,53 @@ void *waitingThread(void *param)
     waitStruct *mycmd = (waitStruct *)param;
     int psd = mycmd->psd;
     int pid = mycmd->groupId;
+    struct sockaddr_in cliAddr;
+    cliAddr = mycmd->cliAddr;
+    int outfd = mycmd->outfd;
     dprintf(2, "inside waiting thread psd : %d pid: %d\n", psd, pid);
-
+    socklen_t fromlen = sizeof(cliAddr);
     while (mycmd->doneFlag == 1)
     {
         dprintf(2, "%d ", mycmd->doneFlag);
         cleanup(buf);
-        if ((rc = recv(psd, buf, sizeof(buf), 0)) < 0)
+        memset(buf, 0, sizeof(buf));
+
+        if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0)
         {
             perror("receiving stream  message");
             pthread_exit((void *)1);
         }
-        if (rc > 0)
+        if (rc >= 0)
         {
             buf[rc] = '\0';
             char *inString;
             inString = strdup(buf);
-            checkForCTLcmd(inString, pid, &(mycmd->doneFlag));
+            checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc);
         }
         else
         {
             dprintf(2, "exit child thread");
             pthread_exit(0);
+            pthread_cancel(pthread_self());
         }
     }
     pthread_exit(0);
 }
-void checkForCTLcmd(char *cmd, int pid, int *doneFlag)
+
+char *manageCommand(char *cmd)
+{
+    char *incomingCmd = strdup(cmd);
+    if (strstr(cmd, "CMD"))
+    {
+        char *savePtr;
+        char *newCmd = strtok_r(cmd, "CMD", &savePtr);
+
+        return newCmd;
+    }
+    return NULL;
+}
+
+void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc)
 {
     if (strstr(cmd, "CTL"))
     {
@@ -930,14 +948,61 @@ void checkForCTLcmd(char *cmd, int pid, int *doneFlag)
     }
     else
     {
-        *doneFlag = 1;
-        // pthread_exit(0);
+        dprintf(2, "in else part");
+        ssize_t bytesread;
+        socklen_t fromlen = sizeof(cliAddr);
+        char text[BUFSIZE];
+        char *inString;
+        char *firstLine = strdup(cmd);
+        char *fileData = (char *)malloc(sizeof(char) * 1000);
+        if (outfd != 1)
+        {
+            while ((bytesread = recvfrom(psd, (char *)text, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) > 0)
+            {
+                text[bytesread] = '\0';
+                inString = strdup(text);
+                char *newCmd;
+                if (strstr(inString, "CTL"))
+                {
+                    break;
+                }
+                newCmd = manageCommand(inString);
+                strcat(fileData, newCmd);
+            }
+            if (fileData != NULL)
+            {
+                char *newCmd;
+                newCmd = manageCommand(firstLine);
+                write(outfd, newCmd, strlen(newCmd));
+                write(outfd, fileData, strlen(fileData));
+            }
+            lseek(outfd, (off_t)0, SEEK_SET);
+            *doneFlag = 2;
+            if (strstr(inString, "CTL"))
+            {
+                close(outfd);
+                *doneFlag = 3;
+                if (strstr(inString, "CTL C") || strstr(inString, "CTL c"))
+                {
+                    dprintf(2, "got child %s\n", inString);
+                    kill(pid, SIGINT);
+                    pthread_exit(0);
+                }
+                else if (strstr(inString, "CTL Z") || strstr(inString, "CTL z"))
+                {
+                    dprintf(2, "got child %s\n", inString);
+                    kill(pid, SIGTSTP);
+                    pthread_exit(0);
+                }
+            }
+        }
     }
     // pthread_exit(0);
 }
 /**This function sets the input/output/pipe  parameter before execution**/
-int executeParsedCommand(struct processList *rootProcess, int job_type, int psd, struct jobList **rootJob)
+int executeParsedCommand(struct processList *rootProcess, int job_type, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr)
 {
+    printZombies(psd);
     struct processList *proc;
     int status = 0;
     int pipefd[2];
@@ -948,32 +1013,36 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
     {
         if (rootProcess->inputPath != NULL)
         {
+            pthread_mutex_lock(&lock);
             if ((infd = open(rootProcess->inputPath, O_RDONLY)) < 0)
             {
                 fprintf(stderr, "error opening file\n");
             }
+            pthread_mutex_lock(&lock);
         }
 
         if (rootProcess->outputPath != NULL)
         {
             outfd = 1;
+            pthread_mutex_lock(&lock);
             outfd = open(rootProcess->outputPath, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
             if (outfd < 0)
             {
                 outfd = 1;
             }
             pipefd[1] = outfd;
+            pthread_mutex_unlock(&lock);
         }
 
         if (rootProcess->next == NULL)
         {
 
-            status = exexuteCommands(rootProcess, infd, outfd, job_type, psd, rootJob);
+            status = exexuteCommands(rootProcess, infd, outfd, job_type, psd, rootJob, cliaddr);
         }
         else if (rootProcess->next != NULL)
         {
 
-            status = exexuteCommands(rootProcess, infd, pipefd[1], 2, psd, rootJob);
+            status = exexuteCommands(rootProcess, infd, pipefd[1], 2, psd, rootJob, cliaddr);
             close(pipefd[1]);
             infd = pipefd[0];
         }
@@ -985,7 +1054,7 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
 }
 
 /**This function executes shell commands like fg/bg/jobs**/
-void executeShellCommands(char *inString, int psd, struct jobList **rootJob)
+void executeShellCommands(char *inString, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr)
 {
     char *command = strdup(inString);
     if (strstr(inString, "fg"))
@@ -1010,18 +1079,20 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob)
             {
                 dprintf(psd, "%s\n", jobObj->jobCommand);
             }
-            tcsetpgrp(0, pid);
+            // tcsetpgrp(0, pid);
 
             int status = 0;
-            waitFunction(pid, psd, &status);
+            pthread_mutex_lock(&lock);
+            waitFunction(pid, psd, &status, cliaddr, 2);
 
             if (WSTOPSIG(status))
             {
                 pushJob(rootJob, jobObj->process->cpid, jobObj->jobCommand, STOPPED, jobObj->jobCount, jobObj->process, psd);
             }
+            pthread_mutex_unlock(&lock);
 
             signal(SIGTTOU, SIG_IGN);
-            tcsetpgrp(0, getpid());
+            // tcsetpgrp(0, getpid());
             signal(SIGTTOU, SIG_DFL);
         }
     }
@@ -1039,6 +1110,7 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob)
             int wpid = -1;
             pid_t pid;
             pid = jobObj->process->groupId;
+            int wstatus;
 
             kill(-pid, SIGCONT);
             usleep(100);
@@ -1064,7 +1136,7 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob)
             {
 
                 assigbJobSign(&clientList->job);
-                printClientJobs(clientList);
+                printClientJobs(clientList, psd);
             }
         }
     }
@@ -1077,10 +1149,11 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob)
 /**This function checks if the given command is background command, if yes then
  * removes the & from the cmd string and set bg flag and then parse rest of the command by removing
  * spaces from the commands and collects token **/
-char **parsecommands(char *inString, int psd, struct jobList **rootJob)
+char **parsecommands(char *inString, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr)
 {
 
     // globalPsd = psd;
+    printZombies(psd);
     char *command = strdup(inString);
     int job_type = fg;
     char **parsedCommandsArray;
@@ -1103,7 +1176,7 @@ char **parsecommands(char *inString, int psd, struct jobList **rootJob)
             if (clientList != NULL)
             {
 
-                executeShellCommands(inString, psd, &clientList->job);
+                executeShellCommands(inString, psd, &clientList->job, cliaddr);
             }
         }
     }
@@ -1121,7 +1194,7 @@ char **parsecommands(char *inString, int psd, struct jobList **rootJob)
         rootProcess->processString = command;
         // printList(rootProcess);
 
-        status = executeParsedCommand(rootProcess, job_type, psd, rootJob);
+        status = executeParsedCommand(rootProcess, job_type, psd, rootJob, cliaddr);
     }
     return parsedCommandsArray;
 }

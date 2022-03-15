@@ -1,20 +1,19 @@
 #include <stdio.h>
-/* socket(), bind(), recv, send */
 #include <sys/types.h>
-#include <sys/socket.h> /* sockaddr_in */
-#include <netinet/in.h> /* inet_addr() */
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <netdb.h>  /* struct hostent */
-#include <string.h> /* memset() */
-#include <unistd.h> /* close() */
-#include <stdlib.h> /* exit() */
+#include <netdb.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include "yash.h"
 
 extern int errno;
 
 #define PATHMAX 255
 #define MAXHOSTNAME 80
-#define PORT 7878
+#define PORT 3826
 
 static char u_server_path[PATHMAX + 1] = "/tmp"; /* default */
 static char u_socket_path[PATHMAX + 1];
@@ -22,7 +21,7 @@ static char u_log_path[PATHMAX + 1];
 static char u_pid_path[PATHMAX + 1];
 
 void reusePort(int s);
-void execute(char *inString, int psd, struct jobList **rootJob);
+void execute(char *inString, int psd, struct jobList **rootJob, struct sockaddr_in cliAddr);
 char *manageCommandOrSignals(char *cmd);
 void *processRequest(void *input);
 void initializeDaemon(const char *const path, uint mask);
@@ -136,28 +135,24 @@ void initializeDaemon(const char *const path, uint mask)
 void makeConnections(char *argv[])
 {
     int sd;
-    struct sockaddr_in server;
+    struct sockaddr_in serverAddr;
     struct hostent *hp, *gethostbyname();
-    struct sockaddr_in from;
+    struct sockaddr_in clientAddr;
     socklen_t fromlen;
     socklen_t length;
     char ThisHost[80];
     int pn, i = 0;
     int childpid;
 
-    struct ClientInfo client;
-
-    signal(SIGPIPE, SIG_IGN);
-    signal(SIGCHLD, sigChildHandler);
-    signal(SIGINT, SIG_IGN);
-    signal(SIGTSTP, SIG_IGN);
-    signal(SIGQUIT, SIG_IGN);
-    signal(SIGTTIN, SIG_IGN);
+    initshell();
     signal(SIGHUP, sig_hup);
 
-    server.sin_family = AF_INET;
-    server.sin_addr.s_addr = htonl(INADDR_ANY);
-    server.sin_port = htons(PORT);
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    memset(&clientAddr, 0, sizeof(clientAddr));
+
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serverAddr.sin_port = htons(PORT);
     sd = socket(AF_INET, SOCK_STREAM, 0);
     if (sd < 0)
     {
@@ -167,15 +162,15 @@ void makeConnections(char *argv[])
 
     reusePort(sd);
 
-    if (bind(sd, (struct sockaddr *)&server, sizeof(server)) < 0)
+    if (bind(sd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0)
     {
         close(sd);
         dprintf(2, "binding name to stream socket");
         exit(-1);
     }
 
-    length = sizeof(server);
-    if (getsockname(sd, (struct sockaddr *)&server, &length))
+    length = sizeof(serverAddr);
+    if (getsockname(sd, (struct sockaddr *)&serverAddr, &length))
     {
         perror("getting socket name");
         exit(0);
@@ -184,19 +179,20 @@ void makeConnections(char *argv[])
     pthread_mutex_init(&lock, NULL);
     pthread_t thread_id;
     listen(sd, 4);
-    fromlen = sizeof(from);
+    fromlen = sizeof(clientAddr);
 
     for (;;)
     {
-        int psd = accept(sd, (struct sockaddr *)&from, &fromlen);
+        int psd = accept(sd, (struct sockaddr *)&clientAddr, &fromlen);
         if (psd == -1)
         {
             perror("connection error");
         }
         else
         {
+            struct ClientInfo client;
             client.sock = psd;
-            client.from = from;
+            client.from = clientAddr;
 
             if (pthread_create(&thread_id, NULL, processRequest, (void *)&client) < 0)
             {
@@ -219,25 +215,28 @@ void *processRequest(void *clientInfo)
     char buf[BUFSIZE];
     int rc;
     int psd;
-    struct sockaddr_in from;
+    struct sockaddr_in cliaddr;
     struct jobList *rootJob = NULL;
     struct ClientInfo *tempInfo = (struct ClientInfo *)clientInfo;
     psd = tempInfo->sock;
-    from = tempInfo->from;
+    cliaddr = tempInfo->from;
     struct ClientInfo info;
     info = *tempInfo;
 
     // pthread_mutex_init(&info.lock, NULL);
     struct hostent *hp, *gethostbyname();
+    socklen_t fromlen = sizeof(cliaddr);
 
     for (;;)
     {
+        int bytes_sent;
         cleanup(buf);
-        dprintf(psd, "\n....server is waiting...\n");
-        // char *start = "\n# ";
-        // send(psd, start, strlen(start), 0);
+        memset(buf, 0, sizeof(buf));
+        char start[] = "\n#\n";
+        write(psd, start, strlen(start));
+        
 
-        if ((rc = recv(psd, buf, sizeof(buf), 0)) < 0)
+        if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliaddr, &fromlen)) < 0)
         {
             perror("receiving stream  message");
             pthread_exit((void *)1);
@@ -247,13 +246,12 @@ void *processRequest(void *clientInfo)
             buf[rc] = '\0';
             char *inString;
             inString = strdup(buf);
-            logging(from, inString);
-            execute(inString, psd, &rootJob);
+            logging(cliaddr, inString);
+            execute(inString, psd, &rootJob, cliaddr);
         }
         else
         {
-            dprintf(2, "Client: %s:%d Disconnected..\n", inet_ntoa(from.sin_addr), ntohs(from.sin_port));
-            fflush(stdout);
+            dprintf(2, "Client: %s:%d Disconnected..\n", inet_ntoa(cliaddr.sin_addr), ntohs(cliaddr.sin_port));
             close(psd);
             pthread_exit(0);
         }
@@ -296,7 +294,7 @@ char *manageCommandOrSignals(char *cmd)
     return NULL;
 }
 
-void execute(char *inString, int psd, struct jobList **rootJob)
+void execute(char *inString, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr)
 {
     char *command;
     char *newCmd;
@@ -306,9 +304,8 @@ void execute(char *inString, int psd, struct jobList **rootJob)
         newCmd = manageCommandOrSignals(inString);
         if (newCmd != NULL)
         {
-            // pthread_mutex_lock(&lock);
-            char **resultString = parsecommands(newCmd, psd, rootJob);
-            // pthread_mutex_unlock(&lock);
+
+            char **resultString = parsecommands(newCmd, psd, rootJob, cliaddr);
         }
     }
 }
