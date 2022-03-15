@@ -351,7 +351,7 @@ void printJobs(struct jobList *root, int terminalID)
     {
         printJobs(root->next, terminalID);
         char buffer[100];
-        sprintf(buffer, "[%d]%s %s %s %d [%d]\n", root->jobCount, root->jobSign, getJobsStatus(root->jobStatus), root->jobCommand, root->jobId, root->terminal);
+        sprintf(buffer, "[%d]%s %s %s\n", root->jobCount, root->jobSign, getJobsStatus(root->jobStatus), root->jobCommand);
         send(terminalID, buffer, strlen(buffer), 0);
 
         // dprintf(terminalID, "[%d]%s %s %s %d [%d]\n", root->jobCount, root->jobSign, getJobsStatus(root->jobStatus), root->jobCommand, root->jobId, root->terminal);
