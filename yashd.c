@@ -94,10 +94,10 @@ void initializeDaemon(const char *const path, uint mask)
     /* From this point on printf and scanf have no effect */
 
     /* Redirecting stderr to u_log_path */
-    log = fopen(u_log_path, "aw"); /* attach stderr to u_log_path */
-    fileFd = fileno(log);          /* obtain file descriptor of the log */
-    dup2(fileFd, STDERR_FILENO);
-    close(fileFd);
+    // log = fopen(u_log_path, "w"); /* attach stderr to u_log_path */
+    // fileFd = fileno(log);          /* obtain file descriptor of the log */
+    // dup2(fileFd, STDERR_FILENO);
+    // close(fileFd);
     /* From this point on printing to stderr will go to /tmp/u-echod.log */
 
     /* Change directory to specified directory */
@@ -125,7 +125,7 @@ void initializeDaemon(const char *const path, uint mask)
         exit(0);
 
     /* Save server's pid without closing file (so lock remains)*/
-    sprintf(buff, "%6d", pid);
+    sprintf(buff, "%6d\n", pid);
     write(k, buff, strlen(buff));
 
     signal(SIGTERM, sig_exit);
@@ -234,7 +234,6 @@ void *processRequest(void *clientInfo)
         memset(buf, 0, sizeof(buf));
         char start[] = "\n#\n";
         write(psd, start, strlen(start));
-        
 
         if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliaddr, &fromlen)) < 0)
         {
@@ -261,13 +260,25 @@ void *processRequest(void *clientInfo)
 void logging(struct sockaddr_in from, char *inString)
 {
 
-    // time_t currTime;
-    // time(&currTime);
-    // char *newCmd;
+ 
+    static FILE *log;
+    char cur_time[128];
+    time_t t;
+    struct tm *ptm;
+
+    t = time(NULL);
+    ptm = localtime(&t);
+
+    strftime(cur_time, 128, "%d-%b-%Y %H:%M:%S", ptm);
+
+    log = fopen(u_log_path, "aw");
+
     if (strstr(inString, "CMD"))
     {
-        dprintf(2, "yashd[%s:%d]: %s\n", inet_ntoa(from.sin_addr),
+
+        fprintf(log, "%s yashd[%s:%d]: %s\n", cur_time, inet_ntoa(from.sin_addr),
                 ntohs(from.sin_port), inString);
+        fclose(log);
     }
 }
 void reusePort(int s)

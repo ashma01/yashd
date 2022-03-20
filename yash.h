@@ -232,9 +232,6 @@ void printdone(struct jobList *root)
         char buffer[100];
         sprintf(buffer, "[%d] %s %s %s\n", root->jobCount, root->jobSign, "Done", root->jobCommand);
         send(root->terminal, buffer, strlen(buffer), 0);
-
-        // dprintf(root->terminal, "\n[%d] %s %s %s %d %d\n", root->jobCount, root->jobSign, "Done", root->jobCommand, root->jobId, root->terminal);
-        // printf("\n[%d] %s %s %s\n", root->jobCount, root->jobSign, "Done", root->jobCommand);
     }
 }
 
@@ -353,8 +350,6 @@ void printJobs(struct jobList *root, int terminalID)
         char buffer[100];
         sprintf(buffer, "[%d]%s %s %s\n", root->jobCount, root->jobSign, getJobsStatus(root->jobStatus), root->jobCommand);
         send(terminalID, buffer, strlen(buffer), 0);
-
-        // dprintf(terminalID, "[%d]%s %s %s %d [%d]\n", root->jobCount, root->jobSign, getJobsStatus(root->jobStatus), root->jobCommand, root->jobId, root->terminal);
     }
 }
 
@@ -770,6 +765,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         {
 
             dup2(infd, STDIN_FILENO);
+            // dup2(infd, psd);
             close(infd);
         }
         if (outfd != 1)
@@ -836,7 +832,6 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         else if (job_type == bg)
         {
 
-            dprintf(2, "inside & push\n");
             struct ClientJobList *clientList = NULL;
 
             clientList = search(&rootClientJobList, psd);
@@ -845,7 +840,6 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
             {
                 clientList->clientJobNumber = clientList->clientJobNumber + 1;
                 jobNumber = clientList->clientJobNumber;
-                dprintf(2, "found client %d", jobNumber);
             }
             pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, RUNNING, ++jobNumber);
         }
@@ -885,33 +879,53 @@ void *waitingThread(void *param)
     struct sockaddr_in cliAddr;
     cliAddr = mycmd->cliAddr;
     int outfd = mycmd->outfd;
-    dprintf(2, "inside waiting thread psd : %d pid: %d\n", psd, pid);
+
     socklen_t fromlen = sizeof(cliAddr);
+    dprintf(2, "inside waiting thread block\n");
+
     while (mycmd->doneFlag == 1)
     {
-        dprintf(2, "%d ", mycmd->doneFlag);
+        dprintf(2, "inside while rc %d\n", mycmd->doneFlag);
         cleanup(buf);
         memset(buf, 0, sizeof(buf));
 
-        if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0)
-        {
-            perror("receiving stream  message");
-            pthread_exit((void *)1);
-        }
+        rc = recvfrom(psd, (char *)buf, BUFSIZE, MSG_DONTWAIT, (struct sockaddr *)&cliAddr, &fromlen);
         if (rc >= 0)
         {
+            dprintf(2, "inside check rc\n");
             buf[rc] = '\0';
             char *inString;
             inString = strdup(buf);
             checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc);
         }
-        else
+        if (mycmd->doneFlag != 1)
         {
-            dprintf(2, "exit child thread");
+            dprintf(2, "after pthread_exit flag-- %d\n", mycmd->doneFlag);
+            dprintf(2, "after pthread_exit \n");
             pthread_exit(0);
-            pthread_cancel(pthread_self());
         }
+        dprintf(2, "after if flag-- %d\n", mycmd->doneFlag);
+        // if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0)
+        // {
+        //     perror("receiving stream  message");
+        //     pthread_exit((void *)1);
+        // }
+        // if (rc >= 0)
+        // {
+        //     dprintf(2, "inside check rc\n");
+        //     buf[rc] = '\0';
+        //     char *inString;
+        //     inString = strdup(buf);
+        //     checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc);
+        // }
+        // else
+        // {
+        //     dprintf(2, "after pthread_exit \n");
+        //     pthread_exit(0);
+        //     pthread_cancel(pthread_self());
+        // }
     }
+    dprintf(2, "last pthread exit \n");
     pthread_exit(0);
 }
 
@@ -930,25 +944,27 @@ char *manageCommand(char *cmd)
 
 void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc)
 {
+    dprintf(2, "inside checkForCTLcmd block\n");
     if (strstr(cmd, "CTL"))
     {
         *doneFlag = 3;
         if (strstr(cmd, "CTL C") || strstr(cmd, "CTL c"))
         {
-            dprintf(2, "got child %s\n", cmd);
+
             kill(pid, SIGINT);
             pthread_exit(0);
         }
         else if (strstr(cmd, "CTL Z") || strstr(cmd, "CTL z"))
         {
-            dprintf(2, "got child %s\n", cmd);
+
             kill(pid, SIGTSTP);
             pthread_exit(0);
         }
     }
     else
     {
-        dprintf(2, "in else part");
+        dprintf(2, "inside else block\n");
+        tcsetpgrp(0, pid);
         ssize_t bytesread;
         socklen_t fromlen = sizeof(cliAddr);
         char text[BUFSIZE];
@@ -981,16 +997,16 @@ void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struc
             if (strstr(inString, "CTL"))
             {
                 close(outfd);
-                *doneFlag = 3;
+
                 if (strstr(inString, "CTL C") || strstr(inString, "CTL c"))
                 {
-                    dprintf(2, "got child %s\n", inString);
+
                     kill(pid, SIGINT);
                     pthread_exit(0);
                 }
                 else if (strstr(inString, "CTL Z") || strstr(inString, "CTL z"))
                 {
-                    dprintf(2, "got child %s\n", inString);
+
                     kill(pid, SIGTSTP);
                     pthread_exit(0);
                 }
@@ -1018,7 +1034,7 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
             {
                 fprintf(stderr, "error opening file\n");
             }
-            pthread_mutex_lock(&lock);
+            pthread_mutex_unlock(&lock);
         }
 
         if (rootProcess->outputPath != NULL)
