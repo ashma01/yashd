@@ -142,7 +142,7 @@ int main(int argc, char **argv)
         cleanup(rbuf);
         if ((rc = recv(sd, rbuf, sizeof(buf), 0)) < 0)
         {
-            perror("receiving stream  message");
+            perror("receiving stream  message 3");
             exit(-1);
         }
         if (rc > 0)
