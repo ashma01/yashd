@@ -488,17 +488,15 @@ void checkPrevJobCount(struct jobList **temp, int psd)
 /** This function does the initianlization of the shell and handles the signal for yash **/
 void initshell()
 {
-    // dprintf("Welcome to the new YetAnotherShell\n");
 
-    // signal(SIGCHLD, sigChildHandler);
     signal(SIGINT, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
-
+    signal(SIGTTOU, SIG_IGN);
     pid_t pid = getpid();
     setpgid(pid, pid);
-    // tcsetpgrp(0, pid);
+    tcsetpgrp(0, pid);
 }
 
 /**To check if the given command is shell command**/
@@ -745,10 +743,10 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
-        signal(SIGTTIN, SIG_DFL);
-        signal(SIGTTOU, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
         signal(SIGSTOP, SIG_DFL);
+        signal(SIGTTIN, SIG_DFL);
+        signal(SIGTTOU, SIG_DFL);
 
         rootProcess->cpid = getpid();
         if (rootProcess->groupId > 0)
@@ -808,7 +806,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
             siginfo_t SignalInfo;
             int processCount = getProcessCount(rootProcess);
             int waitStatus;
-            pthread_mutex_lock(&lock);
+
             waitFunction(rootProcess->groupId, psd, &waitStatus, cliaddr, outfd);
 
             if (WIFSTOPPED(waitStatus))
@@ -824,7 +822,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
                 }
                 pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++jobNumber);
             }
-            pthread_mutex_unlock(&lock);
+
             signal(SIGTTOU, SIG_IGN);
             // tcsetpgrp(0, getpid());
             signal(SIGTTOU, SIG_DFL);
@@ -885,11 +883,12 @@ void *waitingThread(void *param)
 
     while (mycmd->doneFlag == 1)
     {
-        dprintf(2, "inside while rc %d\n", mycmd->doneFlag);
-        cleanup(buf);
-        memset(buf, 0, sizeof(buf));
-
-        rc = recvfrom(psd, (char *)buf, BUFSIZE, MSG_DONTWAIT, (struct sockaddr *)&cliAddr, &fromlen);
+        dprintf(2, "inside while thread %d\n", mycmd->doneFlag);
+        if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0)
+        {
+            perror("receiving stream  message 2");
+            pthread_exit((void *)1);
+        }
         if (rc >= 0)
         {
             dprintf(2, "inside check rc\n");
@@ -898,18 +897,17 @@ void *waitingThread(void *param)
             inString = strdup(buf);
             checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc);
         }
-        if (mycmd->doneFlag != 1)
+        else
         {
-            dprintf(2, "after pthread_exit flag-- %d\n", mycmd->doneFlag);
             dprintf(2, "after pthread_exit \n");
             pthread_exit(0);
+            pthread_cancel(pthread_self());
         }
-        dprintf(2, "after if flag-- %d\n", mycmd->doneFlag);
-        // if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0)
-        // {
-        //     perror("receiving stream  message");
-        //     pthread_exit((void *)1);
-        // }
+
+        // cleanup(buf);
+        // memset(buf, 0, sizeof(buf));
+
+        // rc = recvfrom(psd, (char *)buf, BUFSIZE, MSG_DONTWAIT, (struct sockaddr *)&cliAddr, &fromlen);
         // if (rc >= 0)
         // {
         //     dprintf(2, "inside check rc\n");
@@ -918,11 +916,10 @@ void *waitingThread(void *param)
         //     inString = strdup(buf);
         //     checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc);
         // }
-        // else
+        // if (mycmd->doneFlag != 1)
         // {
-        //     dprintf(2, "after pthread_exit \n");
+        //     dprintf(2, "after pthread_exit flag-- %d\n", mycmd->doneFlag);
         //     pthread_exit(0);
-        //     pthread_cancel(pthread_self());
         // }
     }
     dprintf(2, "last pthread exit \n");
@@ -964,7 +961,6 @@ void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struc
     else
     {
         dprintf(2, "inside else block\n");
-        tcsetpgrp(0, pid);
         ssize_t bytesread;
         socklen_t fromlen = sizeof(cliAddr);
         char text[BUFSIZE];
@@ -993,7 +989,7 @@ void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struc
                 write(outfd, fileData, strlen(fileData));
             }
             lseek(outfd, (off_t)0, SEEK_SET);
-            *doneFlag = 2;
+            *doneFlag = 4;
             if (strstr(inString, "CTL"))
             {
                 close(outfd);
@@ -1029,12 +1025,11 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
     {
         if (rootProcess->inputPath != NULL)
         {
-            pthread_mutex_lock(&lock);
+
             if ((infd = open(rootProcess->inputPath, O_RDONLY)) < 0)
             {
                 fprintf(stderr, "error opening file\n");
             }
-            pthread_mutex_unlock(&lock);
         }
 
         if (rootProcess->outputPath != NULL)
@@ -1098,14 +1093,14 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob, str
             // tcsetpgrp(0, pid);
 
             int status = 0;
-            pthread_mutex_lock(&lock);
+            // pthread_mutex_lock(&lock);
             waitFunction(pid, psd, &status, cliaddr, 2);
 
             if (WSTOPSIG(status))
             {
                 pushJob(rootJob, jobObj->process->cpid, jobObj->jobCommand, STOPPED, jobObj->jobCount, jobObj->process, psd);
             }
-            pthread_mutex_unlock(&lock);
+            // pthread_mutex_unlock(&lock);
 
             signal(SIGTTOU, SIG_IGN);
             // tcsetpgrp(0, getpid());

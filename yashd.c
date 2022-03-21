@@ -39,13 +39,6 @@ void sig_pipe(int n)
     perror("Broken pipe signal");
 }
 
-void sig_chld(int n)
-{
-    int status;
-
-    dprintf(2, "Child terminated\n");
-    wait(&status);
-}
 void sig_hup(int n)
 {
     int status;
@@ -59,6 +52,7 @@ void sig_exit(int signo)
     dprintf(2, "exiting\n");
     exit(EXIT_SUCCESS);
 }
+
 void initializeDaemon(const char *const path, uint mask)
 {
     pid_t pid;
@@ -76,13 +70,9 @@ void initializeDaemon(const char *const path, uint mask)
     else if (pid > 0) /* The parent */
         exit(0);
 
-    /* the child */
-
-    /* Close all file descriptors that are open */
     for (k = getdtablesize() - 1; k > 0; k--)
         close(k);
 
-    /* Redirecting stdin and stdout to /dev/null */
     if ((fileFd = open("/dev/null", O_RDWR)) < 0)
     {
         perror("Open");
@@ -91,14 +81,26 @@ void initializeDaemon(const char *const path, uint mask)
     dup2(fileFd, STDIN_FILENO);  /* detach stdin */
     dup2(fileFd, STDOUT_FILENO); /* detach stdout */
     close(fileFd);
-    /* From this point on printf and scanf have no effect */
 
-    /* Redirecting stderr to u_log_path */
-    // log = fopen(u_log_path, "w"); /* attach stderr to u_log_path */
-    // fileFd = fileno(log);          /* obtain file descriptor of the log */
+    // log = fopen(u_log_path, "aw");
+    // fileFd = fileno(log);
     // dup2(fileFd, STDERR_FILENO);
     // close(fileFd);
-    /* From this point on printing to stderr will go to /tmp/u-echod.log */
+
+    /* Establish handlers for signals */
+    // initshell();
+    // signal(SIGINT, SIG_IGN);
+    // signal(SIGQUIT, SIG_IGN);
+    // signal(SIGTSTP, SIG_IGN);
+    // signal(SIGTTIN, SIG_IGN);
+    // signal(SIGTTOU, SIG_IGN);
+    signal(SIGTTIN, SIG_DFL);
+    signal(SIGTTOU, SIG_DFL);
+    if (signal(SIGPIPE, sig_pipe) < 0)
+    {
+        perror("Signal SIGPIPE");
+        exit(1);
+    }
 
     /* Change directory to specified directory */
     chdir(path);
@@ -106,7 +108,6 @@ void initializeDaemon(const char *const path, uint mask)
     /* Set umask to mask (usually 0) */
     umask(mask);
 
-    /* Detach controlling terminal by becoming sesion leader */
     sid = setsid();
     if (sid < 0)
     {
@@ -114,17 +115,14 @@ void initializeDaemon(const char *const path, uint mask)
         exit(1);
     }
 
-    /* Put self in a new process group */
     pid = getpid();
-    setpgrp(); /* GPI: modified for linux */
+    setpgrp();
 
-    /* Make sure only one server is running */
     if ((k = open(u_pid_path, O_RDWR | O_CREAT, 0666)) < 0)
         exit(1);
     if (lockf(k, F_TLOCK, 0) != 0)
         exit(0);
 
-    /* Save server's pid without closing file (so lock remains)*/
     sprintf(buff, "%6d\n", pid);
     write(k, buff, strlen(buff));
 
@@ -144,8 +142,7 @@ void makeConnections(char *argv[])
     int pn, i = 0;
     int childpid;
 
-    initshell();
-    signal(SIGHUP, sig_hup);
+    // initshell();
 
     memset(&serverAddr, 0, sizeof(serverAddr));
     memset(&clientAddr, 0, sizeof(clientAddr));
@@ -237,7 +234,7 @@ void *processRequest(void *clientInfo)
 
         if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliaddr, &fromlen)) < 0)
         {
-            perror("receiving stream  message");
+            perror("receiving stream  message 1");
             pthread_exit((void *)1);
         }
         if (rc > 0)
@@ -245,7 +242,9 @@ void *processRequest(void *clientInfo)
             buf[rc] = '\0';
             char *inString;
             inString = strdup(buf);
+            pthread_mutex_lock(&lock);
             logging(cliaddr, inString);
+            pthread_mutex_unlock(&lock);
             execute(inString, psd, &rootJob, cliaddr);
         }
         else
@@ -259,8 +258,6 @@ void *processRequest(void *clientInfo)
 
 void logging(struct sockaddr_in from, char *inString)
 {
-
- 
     static FILE *log;
     char cur_time[128];
     time_t t;
@@ -334,8 +331,7 @@ int main(int argc, char *argv[])
     strcpy(u_log_path, u_server_path);
     strncat(u_log_path, ".log", PATHMAX - strlen(u_log_path));
 
-    // initializeDaemon(u_server_path, 0); /* We stay in the u_server_path directory and file
-    //                                   creation is not restricted. */
+    initializeDaemon(u_server_path, 0); /* We stay in the u_server_path directory and file  creation is not restricted. */
 
     unlink(u_socket_path); /* delete the socket if already existing */
 
