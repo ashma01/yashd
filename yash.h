@@ -67,6 +67,7 @@ typedef struct waitStruct
     int groupId;
     int doneFlag;
     int outfd;
+    int inputEnd;
     struct sockaddr_in cliAddr;
 } waitStruct;
 
@@ -74,7 +75,7 @@ typedef struct waitStruct
 void printZombies();
 int *getPidListClient(struct ClientJobList *headRef);
 void *waitingThread(void *param);
-void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc);
+void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc, int inputEnd);
 struct jobList *deleteJobByPid(struct jobList **headRef, int pid, int psd);
 void deleteByPIDClientList(struct ClientJobList **rootClientJobList, int pid, int psd);
 int *getPidList(struct jobList **headRef);
@@ -99,7 +100,7 @@ int isEmpty(struct jobList *root);
 void checkPrevJobCount(struct jobList **temp, int psd);
 void assigbJobSign(struct jobList **jobRef);
 int getProcessCount();
-void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr, int outfd);
+void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr, int outfd, int inputEnd);
 
 pthread_cond_t cond1 = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -493,10 +494,10 @@ void initshell()
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
-    signal(SIGTTOU, SIG_IGN);
+
     pid_t pid = getpid();
     setpgid(pid, pid);
-    tcsetpgrp(0, pid);
+    // tcsetpgrp(0, pid);
 }
 
 /**To check if the given command is shell command**/
@@ -516,20 +517,14 @@ int checkIfShellCommands(char *inString)
 char **parseStringStrtok(char *str, char *delim)
 {
 
-    char **parsedString = NULL;
+    char **parsedString = (char **)malloc(sizeof(char) * 1000);
     char *saveptr1;
     char *token = (char *)malloc(sizeof(char) * 1000);
     token = strtok_r(str, delim, &saveptr1);
     int index = 0;
     while (token != NULL)
     {
-        parsedString = realloc(parsedString, sizeof(char *) * ++index);
-        if (parsedString == NULL)
-        {
-            exit(-1);
-        }
-
-        parsedString[index - 1] = token;
+        parsedString[index++] = token;
         token = strtok_r(NULL, delim, &saveptr1);
     }
     return parsedString;
@@ -729,24 +724,28 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
 
     int status = 0;
     int cpid;
+    int pipefd_2[2];
+    pipe(pipefd_2);
+    
     cpid = fork();
 
     if (cpid < 0)
     {
-
         return -1;
     }
 
     if (cpid == 0)
     {
-
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
-        signal(SIGCHLD, SIG_DFL);
-        signal(SIGSTOP, SIG_DFL);
         signal(SIGTTIN, SIG_DFL);
         signal(SIGTTOU, SIG_DFL);
+        signal(SIGCHLD, SIG_DFL);
+        signal(SIGSTOP, SIG_DFL);
+
+        close(pipefd_2[1]);
+        dup2(pipefd_2[0], STDIN_FILENO);
 
         rootProcess->cpid = getpid();
         if (rootProcess->groupId > 0)
@@ -760,15 +759,12 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         }
 
         if (infd != 0)
-        {
-
+        {         
             dup2(infd, STDIN_FILENO);
-            // dup2(infd, psd);
             close(infd);
         }
         if (outfd != 1)
         {
-
             dup2(outfd, psd);
             close(outfd);
         }
@@ -785,9 +781,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
     }
     else
     {
-
         // parent process
-
         rootProcess->cpid = cpid;
         if (rootProcess->groupId > 0)
         {
@@ -801,13 +795,15 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
 
         if (job_type == fg)
         {
-            // tcsetpgrp(0, rootProcess->groupId);
             int waitCount = 0;
-            siginfo_t SignalInfo;
+            //siginfo_t SignalInfo;
             int processCount = getProcessCount(rootProcess);
             int waitStatus;
 
-            waitFunction(rootProcess->groupId, psd, &waitStatus, cliaddr, outfd);
+            close(pipefd_2[0]);
+            // dup2(pipefd_2[1], STDOUT_FILENO); 
+    
+            waitFunction(rootProcess->groupId, psd, &waitStatus, cliaddr, outfd, pipefd_2[1]);
 
             if (WIFSTOPPED(waitStatus))
             {
@@ -823,9 +819,9 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
                 pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++jobNumber);
             }
 
-            signal(SIGTTOU, SIG_IGN);
+            //signal(SIGTTOU, SIG_IGN);
             // tcsetpgrp(0, getpid());
-            signal(SIGTTOU, SIG_DFL);
+            //signal(SIGTTOU, SIG_DFL);
         }
         else if (job_type == bg)
         {
@@ -845,7 +841,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
     return status;
 }
 
-void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr, int outfd)
+void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr, int outfd, int inputEnd)
 {
     pthread_t waitThread;
     int waitid1 = 0;
@@ -855,6 +851,7 @@ void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr,
     args.doneFlag = 1;
     args.cliAddr = cliaddr;
     args.outfd = outfd;
+    args.inputEnd = inputEnd;
 
     if (pthread_create(&waitThread, NULL, waitingThread, &args) < 0)
     {
@@ -877,14 +874,17 @@ void *waitingThread(void *param)
     struct sockaddr_in cliAddr;
     cliAddr = mycmd->cliAddr;
     int outfd = mycmd->outfd;
+    int inputEnd = mycmd->inputEnd;
 
     socklen_t fromlen = sizeof(cliAddr);
     dprintf(2, "inside waiting thread block\n");
 
     while (mycmd->doneFlag == 1)
     {
+        cleanup(buf);
+        memset(buf, 0, sizeof(buf));        
         dprintf(2, "inside while thread %d\n", mycmd->doneFlag);
-        if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0)
+        if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0) //blocking 
         {
             perror("receiving stream  message 2");
             pthread_exit((void *)1);
@@ -895,7 +895,7 @@ void *waitingThread(void *param)
             buf[rc] = '\0';
             char *inString;
             inString = strdup(buf);
-            checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc);
+            checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc, inputEnd);
         }
         else
         {
@@ -903,24 +903,6 @@ void *waitingThread(void *param)
             pthread_exit(0);
             pthread_cancel(pthread_self());
         }
-
-        // cleanup(buf);
-        // memset(buf, 0, sizeof(buf));
-
-        // rc = recvfrom(psd, (char *)buf, BUFSIZE, MSG_DONTWAIT, (struct sockaddr *)&cliAddr, &fromlen);
-        // if (rc >= 0)
-        // {
-        //     dprintf(2, "inside check rc\n");
-        //     buf[rc] = '\0';
-        //     char *inString;
-        //     inString = strdup(buf);
-        //     checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc);
-        // }
-        // if (mycmd->doneFlag != 1)
-        // {
-        //     dprintf(2, "after pthread_exit flag-- %d\n", mycmd->doneFlag);
-        //     pthread_exit(0);
-        // }
     }
     dprintf(2, "last pthread exit \n");
     pthread_exit(0);
@@ -939,77 +921,32 @@ char *manageCommand(char *cmd)
     return NULL;
 }
 
-void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc)
+void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc, int inputEnd)
 {
     dprintf(2, "inside checkForCTLcmd block\n");
     if (strstr(cmd, "CTL"))
     {
+         dprintf(2, "inside checkForCTLcmd if block\n");
         *doneFlag = 3;
         if (strstr(cmd, "CTL C") || strstr(cmd, "CTL c"))
         {
-
             kill(pid, SIGINT);
             pthread_exit(0);
         }
         else if (strstr(cmd, "CTL Z") || strstr(cmd, "CTL z"))
         {
-
             kill(pid, SIGTSTP);
             pthread_exit(0);
         }
     }
-    else
-    {
-        dprintf(2, "inside else block\n");
-        ssize_t bytesread;
-        socklen_t fromlen = sizeof(cliAddr);
-        char text[BUFSIZE];
-        char *inString;
+    else {
+        dprintf(2, "inside checkForCTLcmd else block\n");
         char *firstLine = strdup(cmd);
-        char *fileData = (char *)malloc(sizeof(char) * 1000);
-        if (outfd != 1)
-        {
-            while ((bytesread = recvfrom(psd, (char *)text, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) > 0)
-            {
-                text[bytesread] = '\0';
-                inString = strdup(text);
-                char *newCmd;
-                if (strstr(inString, "CTL"))
-                {
-                    break;
-                }
-                newCmd = manageCommand(inString);
-                strcat(fileData, newCmd);
-            }
-            if (fileData != NULL)
-            {
-                char *newCmd;
-                newCmd = manageCommand(firstLine);
-                write(outfd, newCmd, strlen(newCmd));
-                write(outfd, fileData, strlen(fileData));
-            }
-            lseek(outfd, (off_t)0, SEEK_SET);
-            *doneFlag = 4;
-            if (strstr(inString, "CTL"))
-            {
-                close(outfd);
-
-                if (strstr(inString, "CTL C") || strstr(inString, "CTL c"))
-                {
-
-                    kill(pid, SIGINT);
-                    pthread_exit(0);
-                }
-                else if (strstr(inString, "CTL Z") || strstr(inString, "CTL z"))
-                {
-
-                    kill(pid, SIGTSTP);
-                    pthread_exit(0);
-                }
-            }
-        }
+        char *newCmd = manageCommand(firstLine);
+        dprintf(2, "%s\n", newCmd);
+        write(inputEnd, newCmd, strlen(newCmd));
     }
-    // pthread_exit(0);
+
 }
 /**This function sets the input/output/pipe  parameter before execution**/
 int executeParsedCommand(struct processList *rootProcess, int job_type, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr)
@@ -1023,13 +960,13 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
     pipe(pipefd);
     while (rootProcess != NULL)
     {
-        if (rootProcess->inputPath != NULL)
+        if (rootProcess->inputPath != NULL )
         {
-
             if ((infd = open(rootProcess->inputPath, O_RDONLY)) < 0)
             {
                 fprintf(stderr, "error opening file\n");
             }
+
         }
 
         if (rootProcess->outputPath != NULL)
@@ -1047,16 +984,14 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
 
         if (rootProcess->next == NULL)
         {
-
             status = exexuteCommands(rootProcess, infd, outfd, job_type, psd, rootJob, cliaddr);
         }
         else if (rootProcess->next != NULL)
         {
-
-            status = exexuteCommands(rootProcess, infd, pipefd[1], 2, psd, rootJob, cliaddr);
+            status = exexuteCommands(rootProcess, infd, pipefd[1], 2, psd, rootJob, cliaddr);    
             close(pipefd[1]);
             infd = pipefd[0];
-        }
+        }        
 
         rootProcess = rootProcess->next;
     }
@@ -1094,7 +1029,7 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob, str
 
             int status = 0;
             // pthread_mutex_lock(&lock);
-            waitFunction(pid, psd, &status, cliaddr, 2);
+            waitFunction(pid, psd, &status, cliaddr, 2, 0);
 
             if (WSTOPSIG(status))
             {
@@ -1145,7 +1080,6 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob, str
             clientList = search(&rootClientJobList, psd);
             if (clientList != NULL)
             {
-
                 assigbJobSign(&clientList->job);
                 printClientJobs(clientList, psd);
             }
@@ -1186,7 +1120,6 @@ char **parsecommands(char *inString, int psd, struct jobList **rootJob, struct s
             clientList = search(&rootClientJobList, psd);
             if (clientList != NULL)
             {
-
                 executeShellCommands(inString, psd, &clientList->job, cliaddr);
             }
         }
@@ -1203,25 +1136,8 @@ char **parsecommands(char *inString, int psd, struct jobList **rootJob, struct s
 
         rootProcess = parseStringforPipes(parsedCommandsArray);
         rootProcess->processString = command;
-        // printList(rootProcess);
 
         status = executeParsedCommand(rootProcess, job_type, psd, rootJob, cliaddr);
     }
     return parsedCommandsArray;
 }
-
-// int main()
-// {
-
-//     initshell();
-//     char *inString = (char *)malloc(sizeof(char) * 1000);
-
-//     while ((inString = readline("# ")))
-//     {
-
-//         if (strlen(inString) != 0)
-//         {
-//             parsecommands(inString,2);
-//         }
-//     }
-// }
