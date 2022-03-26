@@ -1,5 +1,3 @@
-#include <readline/readline.h>
-#include <readline/history.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -44,16 +42,6 @@ static void sig_tstp(int signo)
     // free(finalString);
 }
 
-static void sig_kill(int signo)
-{
-
-    char *finalString = (char *)malloc(sizeof(char) * 1000);
-    finalString = strdup("Plain sid");
-    if (send(sd, finalString, strlen(finalString), 0) < 0)
-        perror("sending stream message");
-    // free(finalString);
-}
-
 int main(int argc, char **argv)
 {
     int childpid;
@@ -72,14 +60,14 @@ int main(int argc, char **argv)
 
     gethostname(ThisHost, MAXHOSTNAME);
 
-    printf("Client NAME: %s\n", ThisHost);
+    printf("Client Name: %s\n", ThisHost);
     if ((hp = gethostbyname(ThisHost)) == NULL)
     {
         fprintf(stderr, "Can't find host %s\n", argv[1]);
         exit(-1);
     }
     bcopy(hp->h_addr, &(server.sin_addr), hp->h_length);
-    printf("(Client INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
+    printf("(Client Address: %s )\n", inet_ntoa(server.sin_addr));
 
     if ((hp = gethostbyname(argv[1])) == NULL)
     {
@@ -93,7 +81,7 @@ int main(int argc, char **argv)
     }
     printf("Server running at host NAME: %s\n", hp->h_name);
     bcopy(hp->h_addr, &(server.sin_addr), hp->h_length);
-    printf("Server INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
+    printf("Server Address : %s )\n", inet_ntoa(server.sin_addr));
 
     server.sin_family = AF_INET;
 
@@ -119,7 +107,7 @@ int main(int argc, char **argv)
         perror("could't get peername\n");
         exit(1);
     }
-    printf("Connected to TCPServer1: ");
+    printf("Connected to Server: ");
     printf("%s:%d\n", inet_ntoa(from.sin_addr),
            ntohs(from.sin_port));
     if ((hp = gethostbyaddr((char *)&from.sin_addr.s_addr,
@@ -140,9 +128,9 @@ int main(int argc, char **argv)
     for (;;)
     {
         cleanup(rbuf);
-        if ((rc = recv(sd, rbuf, sizeof(buf), 0)) < 0)
+        if ((rc = recv(sd, rbuf, sizeof(rbuf), 0)) < 0)
         {
-            perror("receiving stream  message 3");
+            perror("receiving stream  message");
             exit(-1);
         }
         if (rc > 0)
@@ -152,7 +140,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            printf("Disconnected..\n");
+            printf("Server disconnected..\n");
             close(sd);
             exit(0);
         }
