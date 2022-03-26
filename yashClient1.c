@@ -1,5 +1,3 @@
-#include <readline/readline.h>
-#include <readline/history.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -10,6 +8,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <stdbool.h>
 
 #define MAXHOSTNAME 80
 #define BUFSIZE 1024
@@ -20,6 +19,8 @@ char rbuf[BUFSIZE];
 void GetUserInput();
 void cleanup(char *buf);
 char *updateCommands(char *inString, char *cmdType);
+bool isValidIpAddress(char *ipAddress);
+
 
 int rc, cc;
 int sd;
@@ -44,14 +45,11 @@ static void sig_tstp(int signo)
     // free(finalString);
 }
 
-static void sig_kill(int signo)
+bool isValidIpAddress(char *ipAddress)
 {
-
-    char *finalString = (char *)malloc(sizeof(char) * 1000);
-    finalString = strdup("Plain sid");
-    if (send(sd, finalString, strlen(finalString), 0) < 0)
-        perror("sending stream message");
-    // free(finalString);
+    struct sockaddr_in sa;
+    int result = inet_pton(AF_INET, ipAddress, &(sa.sin_addr));
+    return result != 0;
 }
 
 int main(int argc, char **argv)
@@ -72,28 +70,46 @@ int main(int argc, char **argv)
 
     gethostname(ThisHost, MAXHOSTNAME);
 
-    printf("Client NAME: %s\n", ThisHost);
+    printf("Client Name: %s\n", ThisHost);
     if ((hp = gethostbyname(ThisHost)) == NULL)
     {
         fprintf(stderr, "Can't find host %s\n", argv[1]);
         exit(-1);
     }
     bcopy(hp->h_addr, &(server.sin_addr), hp->h_length);
-    printf("(Client INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
-
-    if ((hp = gethostbyname(argv[1])) == NULL)
-    {
-        addr.sin_addr.s_addr = inet_addr(argv[1]);
-        if ((hp = gethostbyaddr((char *)&addr.sin_addr.s_addr,
-                                sizeof(addr.sin_addr.s_addr), AF_INET)) == NULL)
+    printf("(Client Address: %s )\n", inet_ntoa(server.sin_addr));
+    
+    bool isIP = isValidIpAddress(argv[1]);
+    if(isIP) {
+        if ((hp = gethostbyaddr(argv[1], sizeof(argv[1]), AF_INET)) == NULL)
         {
-            fprintf(stderr, "Can't find host %s\n", argv[1]);
-            exit(-1);
+            printf("inside if");
+            addr.sin_addr.s_addr = inet_addr(argv[1]);
+            if ((hp = gethostbyaddr((char *)&addr.sin_addr.s_addr,
+                                    sizeof(addr.sin_addr.s_addr), AF_INET)) == NULL)
+            {
+                fprintf(stderr, "Can't find host %s\n", argv[1]);
+                exit(-1);
+            }
+        }
+    } else {
+        if ((hp = gethostbyname(argv[1])) == NULL)
+        {
+            printf("inside if");
+            addr.sin_addr.s_addr = inet_addr(argv[1]);
+            if ((hp = gethostbyaddr((char *)&addr.sin_addr.s_addr,
+                                    sizeof(addr.sin_addr.s_addr), AF_INET)) == NULL)
+            {
+                fprintf(stderr, "Can't find host %s\n", argv[1]);
+                exit(-1);
+            }
         }
     }
+
+    
     printf("Server running at host NAME: %s\n", hp->h_name);
     bcopy(hp->h_addr, &(server.sin_addr), hp->h_length);
-    printf("Server INET ADDRESS is: %s )\n", inet_ntoa(server.sin_addr));
+    printf("Server Address : %s )\n", inet_ntoa(server.sin_addr));
 
     server.sin_family = AF_INET;
 
@@ -119,7 +135,7 @@ int main(int argc, char **argv)
         perror("could't get peername\n");
         exit(1);
     }
-    printf("Connected to TCPServer1: ");
+    printf("Connected to Server: ");
     printf("%s:%d\n", inet_ntoa(from.sin_addr),
            ntohs(from.sin_port));
     if ((hp = gethostbyaddr((char *)&from.sin_addr.s_addr,
@@ -140,9 +156,9 @@ int main(int argc, char **argv)
     for (;;)
     {
         cleanup(rbuf);
-        if ((rc = recv(sd, rbuf, sizeof(buf), 0)) < 0)
+        if ((rc = recv(sd, rbuf, sizeof(rbuf), 0)) < 0)
         {
-            perror("receiving stream  message 3");
+            perror("receiving stream  message");
             exit(-1);
         }
         if (rc > 0)
@@ -152,7 +168,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            printf("Disconnected..\n");
+            printf("Server disconnected..\n");
             close(sd);
             exit(0);
         }
