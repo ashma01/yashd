@@ -10,3 +10,4 @@ yash: yash.c
 clean:
 	rm yashd
 	rm yash
+	
