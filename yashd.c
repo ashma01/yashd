@@ -7,7 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include "yash.h"
+#include "yashShell.h"
 
 extern int errno;
 
@@ -15,16 +15,15 @@ extern int errno;
 #define MAXHOSTNAME 80
 #define PORT 3826
 
-static char u_server_path[PATHMAX + 1] = "/tmp"; /* default */
-static char u_socket_path[PATHMAX + 1];
-static char u_log_path[PATHMAX + 1];
-static char u_pid_path[PATHMAX + 1];
+char *getcwd(char *buf, size_t size);
+static char *pid_file_name = "/tmp/yashd.pid";
+static char *log_file_name = "/tmp/yashd.log";
 
 void reusePort(int s);
 void execute(char *inString, int psd, struct jobList **rootJob, struct sockaddr_in cliAddr);
 char *manageCommandOrSignals(char *cmd);
 void *processRequest(void *input);
-void initializeDaemon(const char *const path, uint mask);
+static void daemonize(char *cwd);
 void makeConnections(char *argv[]);
 void logging(struct sockaddr_in from, char *inString);
 
@@ -53,81 +52,63 @@ void sig_exit(int signo)
     exit(EXIT_SUCCESS);
 }
 
-void initializeDaemon(const char *const path, uint mask)
+static void daemonize(char *cwd)
 {
     pid_t pid;
-    pid_t sid;
-    char buff[256];
-    static FILE *log;
-    int fileFd;
-    int k;
+    char buff[100];
+    int pid_fd = -1;
 
-    if ((pid = fork()) < 0)
+    pid = fork();
+
+    if (pid < 0)
+        exit(EXIT_FAILURE);
+
+    if (pid > 0)
+        exit(EXIT_SUCCESS);
+
+    if (setsid() < 0)
+        exit(EXIT_FAILURE);
+
+    signal(SIGHUP, SIG_IGN);
+
+    pid = fork();
+
+    if (pid < 0)
+        exit(EXIT_FAILURE);
+
+    if (pid > 0)
+        exit(EXIT_SUCCESS);
+
+    umask(0);
+
+    chdir(cwd);
+
+    int x;
+    for (x = sysconf(_SC_OPEN_MAX); x >= 0; x--)
     {
-        perror("initializeDaemon: cannot fork");
-        exit(0);
-    }
-    else if (pid > 0) /* The parent */
-        exit(0);
-
-    for (k = getdtablesize() - 1; k > 0; k--)
-        close(k);
-
-    if ((fileFd = open("/dev/null", O_RDWR)) < 0)
-    {
-        perror("Open");
-        exit(0);
-    }
-    dup2(fileFd, STDIN_FILENO);  /* detach stdin */
-    dup2(fileFd, STDOUT_FILENO); /* detach stdout */
-    close(fileFd);
-
-    // log = fopen(u_log_path, "aw");
-    // fileFd = fileno(log);
-    // dup2(fileFd, STDERR_FILENO);
-    // close(fileFd);
-
-    /* Establish handlers for signals */
-    // initshell();
-    // signal(SIGINT, SIG_IGN);
-    // signal(SIGQUIT, SIG_IGN);
-    // signal(SIGTSTP, SIG_IGN);
-    // signal(SIGTTIN, SIG_IGN);
-    // signal(SIGTTOU, SIG_IGN);
-    signal(SIGTTIN, SIG_DFL);
-    signal(SIGTTOU, SIG_DFL);
-    if (signal(SIGPIPE, sig_pipe) < 0)
-    {
-        perror("Signal SIGPIPE");
-        exit(1);
+        close(x);
     }
 
-    /* Change directory to specified directory */
-    chdir(path);
-
-    /* Set umask to mask (usually 0) */
-    umask(mask);
-
-    sid = setsid();
-    if (sid < 0)
+    stdin = fopen("/dev/null", "r");
+    stdout = fopen("/dev/null", "w+");
+    stderr = fopen("/dev/null", "w+");
+    if (pid_file_name != NULL)
     {
-        perror("setsid() failure! \n");
-        exit(1);
+        char str[256];
+        pid_fd = open(pid_file_name, O_RDWR | O_CREAT, 0640);
+        if (pid_fd < 0)
+        {
+
+            exit(EXIT_FAILURE);
+        }
+        if (lockf(pid_fd, F_TLOCK, 0) < 0)
+        {
+
+            exit(EXIT_FAILURE);
+        }
+        sprintf(str, "%d\n", getpid());
+        write(pid_fd, str, strlen(str));
     }
-
-    pid = getpid();
-    setpgrp();
-
-    if ((k = open(u_pid_path, O_RDWR | O_CREAT, 0666)) < 0)
-        exit(1);
-    if (lockf(k, F_TLOCK, 0) != 0)
-        exit(0);
-
-    sprintf(buff, "%6d\n", pid);
-    write(k, buff, strlen(buff));
-
-    signal(SIGTERM, sig_exit);
-    return;
 }
 
 void makeConnections(char *argv[])
@@ -142,8 +123,6 @@ void makeConnections(char *argv[])
     int pn, i = 0;
     int childpid;
 
-    // initshell();
-
     memset(&serverAddr, 0, sizeof(serverAddr));
     memset(&clientAddr, 0, sizeof(clientAddr));
 
@@ -153,7 +132,7 @@ void makeConnections(char *argv[])
     sd = socket(AF_INET, SOCK_STREAM, 0);
     if (sd < 0)
     {
-        dprintf(2, "failed to create socket");
+        perror("failed to create socket");
         exit(-1);
     }
 
@@ -162,7 +141,7 @@ void makeConnections(char *argv[])
     if (bind(sd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0)
     {
         close(sd);
-        dprintf(2, "binding name to stream socket");
+        perror("binding name to stream socket");
         exit(-1);
     }
 
@@ -190,6 +169,7 @@ void makeConnections(char *argv[])
             struct ClientInfo client;
             client.sock = psd;
             client.from = clientAddr;
+           
 
             if (pthread_create(&thread_id, NULL, processRequest, (void *)&client) < 0)
             {
@@ -220,7 +200,6 @@ void *processRequest(void *clientInfo)
     struct ClientInfo info;
     info = *tempInfo;
 
-    // pthread_mutex_init(&info.lock, NULL);
     struct hostent *hp, *gethostbyname();
     socklen_t fromlen = sizeof(cliaddr);
 
@@ -234,7 +213,7 @@ void *processRequest(void *clientInfo)
 
         if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliaddr, &fromlen)) < 0)
         {
-            perror("receiving stream  message 1");
+            perror("receiving stream  message");
             pthread_exit((void *)1);
         }
         if (rc > 0)
@@ -249,7 +228,8 @@ void *processRequest(void *clientInfo)
         }
         else
         {
-            dprintf(2, "Client: %s:%d Disconnected..\n", inet_ntoa(cliaddr.sin_addr), ntohs(cliaddr.sin_port));
+
+            logging(cliaddr, "Client Disconnected");
             close(psd);
             pthread_exit(0);
         }
@@ -268,9 +248,9 @@ void logging(struct sockaddr_in from, char *inString)
 
     strftime(cur_time, 128, "%d-%b-%Y %H:%M:%S", ptm);
 
-    log = fopen(u_log_path, "aw");
+    log = fopen(log_file_name, "aw");
 
-    if (strstr(inString, "CMD"))
+    if (inString != NULL)
     {
 
         fprintf(log, "%s yashd[%s:%d]: %s\n", cur_time, inet_ntoa(from.sin_addr),
@@ -319,21 +299,11 @@ void execute(char *inString, int psd, struct jobList **rootJob, struct sockaddr_
 }
 int main(int argc, char *argv[])
 {
-
-    /* Initialize path variables */
-    if (argc > 1)
-        strncpy(u_server_path, argv[1], PATHMAX); /* use argv[1] */
-    strncat(u_server_path, "/", PATHMAX - strlen(u_server_path));
-    strncat(u_server_path, argv[0], PATHMAX - strlen(u_server_path));
-    strcpy(u_socket_path, u_server_path);
-    strcpy(u_pid_path, u_server_path);
-    strncat(u_pid_path, ".pid", PATHMAX - strlen(u_pid_path));
-    strcpy(u_log_path, u_server_path);
-    strncat(u_log_path, ".log", PATHMAX - strlen(u_log_path));
-
-    initializeDaemon(u_server_path, 0); /* We stay in the u_server_path directory and file  creation is not restricted. */
-
-    unlink(u_socket_path); /* delete the socket if already existing */
-
+    char cwd[PATHMAX];
+    if (getcwd(cwd, sizeof(cwd)) == NULL)
+    {
+        perror("getcwd() error");
+    }
+    daemonize(cwd);
     makeConnections(argv);
 }
