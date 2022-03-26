@@ -1,5 +1,5 @@
 /**
- *Program Name: yashShell.h
+ *Program Name: yash.h
  *Author : Ashma Parveen
  *This program reads the input from the client's terminal and executes commands by creating processes as a shell.
  *It implements a subset of features supported by a standard shell like bash/zsh.
@@ -486,6 +486,20 @@ void checkPrevJobCount(struct jobList **temp, int psd)
     }
 }
 
+/** This function does the initianlization of the shell and handles the signal for yash **/
+void initshell()
+{
+
+    signal(SIGINT, SIG_IGN);
+    signal(SIGQUIT, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+
+    pid_t pid = getpid();
+    setpgid(pid, pid);
+    // tcsetpgrp(0, pid);
+}
+
 /**To check if the given command is shell command**/
 int checkIfShellCommands(char *inString)
 {
@@ -747,11 +761,13 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
 
         if (infd != 0)
         {
+
             dup2(infd, STDIN_FILENO);
             close(infd);
         }
         if (outfd != 1)
         {
+
             dup2(outfd, psd);
             close(outfd);
         }
@@ -768,7 +784,9 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
     }
     else
     {
+
         // parent process
+
         rootProcess->cpid = cpid;
         if (rootProcess->groupId > 0)
         {
@@ -782,11 +800,13 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
 
         if (job_type == fg)
         {
+            // TEST funtion
             int waitCount = 0;
             int processCount = getProcessCount(rootProcess);
             int waitStatus;
 
             close(pipefd_2[0]);
+            // dup2(pipefd_2[1], STDOUT_FILENO); 
     
             waitFunction(rootProcess->groupId, psd, &waitStatus, cliaddr, outfd, pipefd_2[1]);
 
@@ -803,9 +823,9 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
                 pushClientJob(&rootClientJobList, *rootJob, psd, rootProcess, STOPPED, ++jobNumber);
             }
 
-            signal(SIGTTOU, SIG_IGN);
+            //signal(SIGTTOU, SIG_IGN);
             // tcsetpgrp(0, getpid());
-            signal(SIGTTOU, SIG_DFL);
+            //signal(SIGTTOU, SIG_DFL);
         }
         else if (job_type == bg)
         {
@@ -882,7 +902,7 @@ void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr,
 
 void *waitingThread(void *param)
 {
-    char bufListner[BUFSIZE];
+    char buf[BUFSIZE];
     int rc;
     waitStruct *mycmd = (waitStruct *)param;
     int psd = mycmd->psd;
@@ -893,32 +913,36 @@ void *waitingThread(void *param)
     int inputEnd = mycmd->inputEnd;
 
     socklen_t fromlen = sizeof(cliAddr);
+    dprintf(2, "inside waiting thread block\n");
 
     while (mycmd->doneFlag == 1)
     {
-        cleanup(bufListner);
-        memset(bufListner, 0, sizeof(bufListner));
-        if ((rc = recvfrom(psd, (char *)bufListner, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0)
+        cleanup(buf);
+        memset(buf, 0, sizeof(buf));        
+        dprintf(2, "inside while thread %d\n", mycmd->doneFlag);
+        if ((rc = recvfrom(psd, (char *)buf, BUFSIZE, 0, (struct sockaddr *)&cliAddr, &fromlen)) < 0) //blocking 
         {
             perror("receiving stream  message 2");
             pthread_exit((void *)1);
         }
         if (rc >= 0)
         {
-            bufListner[rc] = '\0';
+            dprintf(2, "inside check rc\n");
+            buf[rc] = '\0';
             char *inString;
-            inString = strdup(bufListner);
+            inString = strdup(buf);
             checkForCTLcmd(inString, pid, &(mycmd->doneFlag), outfd, psd, cliAddr, rc, inputEnd);
         }
         else
         {
+            dprintf(2, "after pthread_exit \n");
             pthread_exit(0);
             pthread_cancel(pthread_self());
         }
     }
+    dprintf(2, "last pthread exit \n");
     pthread_exit(0);
 }
-
 
 
 void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc, int inputEnd)
@@ -965,7 +989,8 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
 
             if ((infd = open(rootProcess->inputPath, O_RDONLY)) < 0)
             {
-                dprintf(psd, "yash: %s: No such file or directory\n",rootProcess->inputPath);
+
+                perror("error opening file");
             }
         }
 
@@ -1138,8 +1163,25 @@ char **parsecommands(char *inString, int psd, struct jobList **rootJob, struct s
 
         rootProcess = parseStringforPipes(parsedCommandsArray);
         rootProcess->processString = command;
+        // printList(rootProcess);
 
         status = executeParsedCommand(rootProcess, job_type, psd, rootJob, cliaddr);
     }
     return parsedCommandsArray;
 }
+
+// int main()
+// {
+
+//     initshell();
+//     char *inString = (char *)malloc(sizeof(char) * 1000);
+
+//     while ((inString = readline("# ")))
+//     {
+
+//         if (strlen(inString) != 0)
+//         {
+//             parsecommands(inString,2);
+//         }
+//     }
+// }
