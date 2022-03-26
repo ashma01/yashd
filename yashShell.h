@@ -718,6 +718,7 @@ int getProcessCount(struct processList *rootProcess)
 /**This function executes the parsed command by using fork and execvp; This function accepts the job type
  * as a parameter and runs the command
  * in foreground or background mode depending on that**/
+
 int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int job_type, int psd, struct jobList **rootJob, struct sockaddr_in cliaddr)
 {
 
@@ -730,13 +731,11 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
 
     if (cpid < 0)
     {
-
         return -1;
     }
 
     if (cpid == 0)
     {
-
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
@@ -760,14 +759,12 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
         }
 
         if (infd != 0)
-        {
-
+        {         
             dup2(infd, STDIN_FILENO);
             close(infd);
         }
         if (outfd != 1)
         {
-
             dup2(outfd, psd);
             close(outfd);
         }
@@ -784,9 +781,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
     }
     else
     {
-
         // parent process
-
         rootProcess->cpid = cpid;
         if (rootProcess->groupId > 0)
         {
@@ -800,8 +795,8 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
 
         if (job_type == fg)
         {
-            // TEST funtion
             int waitCount = 0;
+            //siginfo_t SignalInfo;
             int processCount = getProcessCount(rootProcess);
             int waitStatus;
 
@@ -814,6 +809,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
             {
                 struct ClientJobList *clientList = NULL;
                 clientList = search(&rootClientJobList, psd);
+                printf("stopped by signal %d\n", WSTOPSIG(waitStatus));
                 int jobNumber = 0;
                 if (clientList != NULL && !isEmpty(clientList->job))
                 {
@@ -844,38 +840,7 @@ int exexuteCommands(struct processList *rootProcess, int infd, int outfd, int jo
     }
     return status;
 }
-void trim(char *str)
-{
-    int index, i, j;
-    index = 0;
-    while (str[index] == ' ' || str[index] == '\t' || str[index] == '\n')
-    {
-        index++;
-    }
-    if (index != 0)
-    {
-        i = 0;
-        while (str[i + index] != '\0')
-        {
-            str[i] = str[i + index];
-            i++;
-        }
-        str[i] = '\0';
-    }
-}
-char *manageCommand(char *cmd)
-{
-    char *incomingCmd = strdup(cmd);
-    if (strstr(cmd, "CMD"))
-    {
-        char *savePtr;
-        char *newCmd = strtok_r(cmd, "CMD", &savePtr);
-        strcat(newCmd, "\n");
-        trim(newCmd);
-        return newCmd;
-    }
-    return NULL;
-}
+
 
 void waitFunction(int pid, int psd, int *waitStatus, struct sockaddr_in cliaddr, int outfd, int inputEnd)
 {
@@ -944,22 +909,55 @@ void *waitingThread(void *param)
     pthread_exit(0);
 }
 
+void trim(char *str)
+{
+    int index, i, j;
+    index = 0;
+    while (str[index] == ' ' || str[index] == '\t' || str[index] == '\n')
+    {
+        index++;
+    }
+    if (index != 0)
+    {
+        i = 0;
+        while (str[i + index] != '\0')
+        {
+            str[i] = str[i + index];
+            i++;
+        }
+        str[i] = '\0';
+    }
+}
+
+char *manageCommand(char *cmd)
+{
+    char *incomingCmd = strdup(cmd);
+    if (strstr(cmd, "CMD"))
+    {
+        char *savePtr;
+        char *newCmd = strtok_r(cmd, "CMD", &savePtr);
+        strcat(newCmd, "\n");
+        trim(newCmd);
+        return newCmd;
+    }
+    return NULL;
+}
 
 void checkForCTLcmd(char *cmd, int pid, int *doneFlag, int outfd, int psd, struct sockaddr_in cliAddr, int rc, int inputEnd)
 {
+    dprintf(2, "inside checkForCTLcmd block\n");
     if (strstr(cmd, "CTL"))
     {
+         dprintf(2, "inside checkForCTLcmd if block\n");
         *doneFlag = 3;
         if (strstr(cmd, "CTL C") || strstr(cmd, "CTL c"))
         {
-
-            kill(-pid, SIGINT);
+            kill(pid, SIGINT);
             pthread_exit(0);
         }
         else if (strstr(cmd, "CTL Z") || strstr(cmd, "CTL z"))
         {
-
-            kill(-pid, SIGTSTP);
+            kill(pid, SIGTSTP);
             pthread_exit(0);
         }
     }
@@ -984,14 +982,13 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
     pipe(pipefd);
     while (rootProcess != NULL)
     {
-        if (rootProcess->inputPath != NULL)
+        if (rootProcess->inputPath != NULL )
         {
-
             if ((infd = open(rootProcess->inputPath, O_RDONLY)) < 0)
             {
-
-                perror("error opening file");
+                dprintf(psd, "yash: %s: No such file or directory\n",rootProcess->inputPath);
             }
+
         }
 
         if (rootProcess->outputPath != NULL)
@@ -1009,16 +1006,14 @@ int executeParsedCommand(struct processList *rootProcess, int job_type, int psd,
 
         if (rootProcess->next == NULL)
         {
-
             status = exexuteCommands(rootProcess, infd, outfd, job_type, psd, rootJob, cliaddr);
         }
         else if (rootProcess->next != NULL)
         {
-
-            status = exexuteCommands(rootProcess, infd, pipefd[1], 2, psd, rootJob, cliaddr);
+            status = exexuteCommands(rootProcess, infd, pipefd[1], 2, psd, rootJob, cliaddr);    
             close(pipefd[1]);
             infd = pipefd[0];
-        }
+        }        
 
         rootProcess = rootProcess->next;
     }
@@ -1090,8 +1085,10 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob, str
             wpid = waitpid(-1, &wstatus, WUNTRACED | WCONTINUED);
             if (WIFCONTINUED(wstatus))
             {
-                dprintf(psd, "[%d] %s %s\n", jobObj->jobCount, jobObj->jobSign, jobObj->jobCommand);
+                char buffer[100];
                 pushJob(rootJob, jobObj->process->cpid, jobObj->jobCommand, RUNNING, jobObj->jobCount, jobObj->process, psd);
+                sprintf(buffer, "[%d] %s %s\n", jobObj->jobCount, jobObj->jobSign, jobObj->jobCommand);
+                send(psd, buffer, strlen(buffer), 0);
             }
         }
     }
@@ -1105,7 +1102,6 @@ void executeShellCommands(char *inString, int psd, struct jobList **rootJob, str
             clientList = search(&rootClientJobList, psd);
             if (clientList != NULL)
             {
-
                 assigbJobSign(&clientList->job);
                 printClientJobs(clientList, psd);
             }
@@ -1146,7 +1142,6 @@ char **parsecommands(char *inString, int psd, struct jobList **rootJob, struct s
             clientList = search(&rootClientJobList, psd);
             if (clientList != NULL)
             {
-
                 executeShellCommands(inString, psd, &clientList->job, cliaddr);
             }
         }
@@ -1163,25 +1158,8 @@ char **parsecommands(char *inString, int psd, struct jobList **rootJob, struct s
 
         rootProcess = parseStringforPipes(parsedCommandsArray);
         rootProcess->processString = command;
-        // printList(rootProcess);
 
         status = executeParsedCommand(rootProcess, job_type, psd, rootJob, cliaddr);
     }
     return parsedCommandsArray;
 }
-
-// int main()
-// {
-
-//     initshell();
-//     char *inString = (char *)malloc(sizeof(char) * 1000);
-
-//     while ((inString = readline("# ")))
-//     {
-
-//         if (strlen(inString) != 0)
-//         {
-//             parsecommands(inString,2);
-//         }
-//     }
-// }
